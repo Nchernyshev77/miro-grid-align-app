@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Image Grid Aligner – панель</title>
+
+  <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+  <script src="app.js" defer></script>
+
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      color-scheme: light dark;
+    }
+
+    body {
+      margin: 16px;
+      font-size: 14px;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 12px;
+    }
+
+    .section-title {
+      font-weight: 600;
+      margin-top: 12px;
+      margin-bottom: 4px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    label {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    input[type="number"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      font-size: 13px;
+      background: rgba(255, 255, 255, 0.9);
+    }
+
+    .radio-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .radio-group label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      opacity: 1;
+    }
+
+    button {
+      margin-top: 12px;
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .hint {
+      margin-top: 8px;
+      font-size: 11px;
+      opacity: 0.7;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h1>Image Grid Aligner</h1>
+
+  <form id="align-form">
+    <div class="section-title">Размер изображений</div>
+    <div class="radio-group">
+      <label>
+        <input type="radio" name="sizeMode" value="none" checked />
+        Не менять размер
+      </label>
+      <label>
+        <input type="radio" name="sizeMode" value="width" />
+        Выравнять по ширине
+      </label>
+      <label>
+        <input type="radio" name="sizeMode" value="height" />
+        Выравнять по высоте
+      </label>
+    </div>
+
+    <div class="section-title">Сетка</div>
+    <div class="field">
+      <label for="imagesPerRow">Картинок в строке</label>
+      <input
+        id="imagesPerRow"
+        name="imagesPerRow"
+        type="number"
+        min="1"
+        step="1"
+        value="4"
+        required
+      />
+    </div>
+
+    <div class="field">
+      <label for="horizontalGap">Расстояние между картинками по горизонтали (px)</label>
+      <input
+        id="horizontalGap"
+        name="horizontalGap"
+        type="number"
+        step="1"
+        value="40"
+      />
+    </div>
+
+    <div class="field">
+      <label for="verticalGap">Расстояние между строками (px)</label>
+      <input
+        id="verticalGap"
+        name="verticalGap"
+        type="number"
+        step="1"
+        value="40"
+      />
+    </div>
+
+    <button type="submit" id="align-button">Применить к выделенным</button>
+
+    <p class="hint">
+      1. На доске выдели нужные изображения (Shift + клик).<br />
+      2. Нажми кнопку выше — изображения выстроятся в сетку.
+    </p>
+  </form>
+</body>
+</html>

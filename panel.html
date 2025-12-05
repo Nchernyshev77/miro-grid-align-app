@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Image Grid Aligner – panel</title>
+  <title>Image Tools – panel</title>
 
   <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
   <script src="app.js" defer></script>
@@ -11,8 +11,7 @@
     :root {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;
-      /* force light mode */
-      color-scheme: light;
+      color-scheme: light; /* всегда светлая тема */
     }
 
     body {
@@ -32,6 +31,36 @@
       font-size: 12px;
       opacity: 0.7;
       margin-bottom: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 13px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 23, 42, 0.15);
+      background: #e5e7eb;
+      cursor: pointer;
+    }
+
+    .tab-btn.active {
+      background: #2563eb;
+      color: #ffffff;
+      border-color: #2563eb;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
     }
 
     .section-title {
@@ -55,7 +84,8 @@
     }
 
     input[type="number"],
-    select {
+    select,
+    input[type="file"] {
       width: 100%;
       box-sizing: border-box;
       padding: 6px 8px;
@@ -71,19 +101,6 @@
       outline: none;
       border-color: #2563eb;
       box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
-    }
-
-    .checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 2px;
-      margin-bottom: 6px;
-      font-size: 12px;
-    }
-
-    .checkbox-row input[type="checkbox"] {
-      margin: 0;
     }
 
     button {
@@ -113,84 +130,185 @@
   </style>
 </head>
 <body>
-  <h1>Image Grid Aligner</h1>
-  <div class="subtitle">Arrange selected images into a neat grid.</div>
+  <h1>Image Tools</h1>
+  <div class="subtitle">
+    Sort and stitch images into precise grids.
+  </div>
 
-  <form id="align-form">
-    <div class="section-title">Size</div>
-    <div class="field">
-      <label for="sizeMode">Resize images</label>
-      <select id="sizeMode" name="sizeMode">
-        <option value="none" selected>Don't resize</option>
-        <option value="width">Match width</option>
-        <option value="height">Match height</option>
-      </select>
-    </div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="sorting">Sorting</button>
+    <button class="tab-btn" data-tab="stitch">Stitch</button>
+  </div>
 
-    <div class="section-title">Grid</div>
-    <div class="field">
-      <label for="imagesPerRow">Images per row</label>
-      <input
-        id="imagesPerRow"
-        name="imagesPerRow"
-        type="number"
-        min="1"
-        step="1"
-        value="8"
-        required
-      />
-    </div>
+  <!-- TAB 1: SORTING -->
+  <div id="tab-sorting" class="tab-content active">
+    <form id="sorting-form">
+      <div class="section-title">Grid</div>
+      <div class="field">
+        <label for="sortingImagesPerRow">Images per row</label>
+        <input
+          id="sortingImagesPerRow"
+          name="sortingImagesPerRow"
+          type="number"
+          min="1"
+          step="1"
+          value="8"
+          required
+        />
+      </div>
 
-    <div class="field">
-      <label for="horizontalGap">Horizontal gap (px)</label>
-      <input
-        id="horizontalGap"
-        name="horizontalGap"
-        type="number"
-        step="1"
-        value="0"
-      />
-    </div>
+      <div class="field">
+        <label for="sortingHorizontalGap">Horizontal gap (px)</label>
+        <input
+          id="sortingHorizontalGap"
+          name="sortingHorizontalGap"
+          type="number"
+          step="1"
+          value="0"
+        />
+      </div>
 
-    <div class="field">
-      <label for="verticalGap">Vertical gap (px)</label>
-      <input
-        id="verticalGap"
-        name="verticalGap"
-        type="number"
-        step="1"
-        value="0"
-      />
-    </div>
+      <div class="field">
+        <label for="sortingVerticalGap">Vertical gap (px)</label>
+        <input
+          id="sortingVerticalGap"
+          name="sortingVerticalGap"
+          type="number"
+          step="1"
+          value="0"
+        />
+      </div>
 
-    <div class="field">
-      <label for="startCorner">Start corner</label>
-      <select id="startCorner" name="startCorner">
-        <option value="top-left">Top left</option>
-        <option value="top-right">Top right</option>
-        <option value="bottom-left">Bottom left</option>
-        <option value="bottom-right">Bottom right</option>
-      </select>
-    </div>
+      <div class="field">
+        <label for="sortingSizeMode">Resize images</label>
+        <select id="sortingSizeMode" name="sortingSizeMode">
+          <option value="none" selected>Don't resize</option>
+          <option value="width">Match width</option>
+          <option value="height">Match height</option>
+        </select>
+      </div>
 
-    <div class="checkbox-row">
-      <input
-        type="checkbox"
-        id="sortByNumber"
-        name="sortByNumber"
-        checked
-      />
-      <label for="sortByNumber">
-        Use numbers in image names (if present)
-      </label>
-    </div>
+      <div class="field">
+        <label for="sortingStartCorner">Start corner</label>
+        <select id="sortingStartCorner" name="sortingStartCorner">
+          <option value="top-left">Top left</option>
+          <option value="top-right">Top right</option>
+          <option value="bottom-left">Bottom left</option>
+          <option value="bottom-right">Bottom right</option>
+        </select>
+      </div>
 
-    <button type="submit" id="align-button">Align selection</button>
+      <button type="submit" id="sortingAlignButton">
+        Number (if needed) & align selection
+      </button>
 
-    <p class="hint">
-      Images with numbers in their name go first (1, 2, 3, ...).<br />
-      Images without numbers go after them and are sorted alphabetically.
-    </p>
-  </form>
+      <p class="hint">
+        Select images on the board and click the button.<br />
+        If some images don't have a title, they will be numbered by geometry
+        (top-left to bottom-right) and the number will be saved into the
+        title. Then all images are aligned in a grid using the numbers in
+        titles.
+      </p>
+    </form>
+  </div>
+
+  <!-- TAB 2: STITCH -->
+  <div id="tab-stitch" class="tab-content">
+    <form id="stitch-form">
+      <div class="section-title">Grid</div>
+      <div class="field">
+        <label for="stitchImagesPerRow">Images per row</label>
+        <input
+          id="stitchImagesPerRow"
+          name="stitchImagesPerRow"
+          type="number"
+          min="1"
+          step="1"
+          value="8"
+          required
+        />
+      </div>
+
+      <div class="field">
+        <label for="stitchHorizontalGap">Horizontal gap (px)</label>
+        <input
+          id="stitchHorizontalGap"
+          name="stitchHorizontalGap"
+          type="number"
+          step="1"
+          value="0"
+        />
+      </div>
+
+      <div class="field">
+        <label for="stitchVerticalGap">Vertical gap (px)</label>
+        <input
+          id="stitchVerticalGap"
+          name="stitchVerticalGap"
+          type="number"
+          step="1"
+          value="0"
+        />
+      </div>
+
+      <div class="field">
+        <label for="stitchStartCorner">Start corner</label>
+        <select id="stitchStartCorner" name="stitchStartCorner">
+          <option value="top-left">Top left</option>
+          <option value="top-right">Top right</option>
+          <option value="bottom-left">Bottom left</option>
+          <option value="bottom-right">Bottom right</option>
+        </select>
+      </div>
+
+      <div class="section-title">Source folder</div>
+      <div class="field">
+        <label for="stitchFolderInput">
+          Choose folder with images (files will be read in the browser)
+        </label>
+        <input
+          id="stitchFolderInput"
+          name="stitchFolderInput"
+          type="file"
+          webkitdirectory
+          multiple
+        />
+      </div>
+
+      <button type="submit" id="stitchButton">
+        Import & stitch images
+      </button>
+
+      <p class="hint">
+        Choose a folder with images. Files will be sorted by name (numbers at
+        the end are taken into account), created on the board and aligned into
+        a grid using the settings above.
+      </p>
+    </form>
+  </div>
+
+  <script>
+    // simple tabs
+    document.addEventListener("DOMContentLoaded", () => {
+      const tabButtons = document.querySelectorAll(".tab-btn");
+      const tabContents = {
+        sorting: document.getElementById("tab-sorting"),
+        stitch: document.getElementById("tab-stitch"),
+      };
+
+      tabButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tab = btn.dataset.tab;
+
+          tabButtons.forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+
+          Object.entries(tabContents).forEach(([name, el]) => {
+            el.classList.toggle("active", name === tab);
+          });
+        });
+      });
+    });
+  </script>
 </body>
 </html>

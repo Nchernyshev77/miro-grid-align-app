@@ -4,35 +4,32 @@
 const { board } = window.miro;
 
 /**
- * Extracts trailing integer number from an image name.
+ * Extracts the LAST integer number from whatever name we can read.
  *
- * - Uses item.title or item.alt (fallback to empty string).
- * - Removes file extension (.png, .jpg, etc.).
- * - Removes copy suffixes like " (1)", "(копия)", "(copy)" at the end.
- * - Then takes the last group of digits at the end.
+ * We intentionally делаем максимально простой и устойчивый парсер:
+ * - Берём item.title, если нет — item.alt, если нет — пустую строку.
+ * - Ищем последнюю группу цифр в строке (где угодно).
+ * - Любое количество нулей в начале: 1, 01, 0001, 10, 011 и т.п.
  *
- * Examples:
- *  "tile_01"        -> 1
- *  "tile01"         -> 1
- *  "tile_0003.png"  -> 3
- *  "tile_10 (1)"    -> 10
- *  "tile_10 (копия)"-> 10
+ * Примеры:
+ *  "tile_01"          -> 1
+ *  "tile01"           -> 1
+ *  "tile_0003.png"    -> 3 (если в title есть ".png")
+ *  "my-tile-10 (copy)"-> 10
+ *  "img_42"           -> 42
  */
 function extractIndexFromItem(item) {
-  const raw = item.title || item.alt || "";
+  const raw = (item.title || item.alt || "").toString();
   if (!raw) return null;
 
-  // Remove extension
-  let base = String(raw).replace(/\.[^/.]+$/, "");
-
-  // Remove copy suffix in parentheses with anything inside
-  base = base.replace(/\(\s*[^)]*\s*\)\s*$/, "");
-
-  // Take the last group of digits at the very end
-  const match = base.match(/(\d+)\s*$/);
+  // Берём ПОСЛЕДНЮЮ группу цифр где угодно в строке
+  const match = raw.match(/(\d+)(?!.*\d)/);
   if (!match) return null;
 
-  return Number.parseInt(match[1], 10);
+  const num = Number.parseInt(match[1], 10);
+  if (Number.isNaN(num)) return null;
+
+  return num;
 }
 
 /**
@@ -47,15 +44,22 @@ function compareByGeometry(a, b) {
 }
 
 /**
- * Sort images either by number at end of name (if present) or by geometry.
+ * Sort images either by number (if present) or by geometry.
  */
 function sortImages(images, sortByNumber) {
-  const withMeta = images.map((item) => ({
-    item,
-    index: extractIndexFromItem(item),
-  }));
+  const withMeta = images.map((item) => {
+    const index = extractIndexFromItem(item);
+    return { item, index };
+  });
 
   const anyIndex = withMeta.some((m) => m.index !== null);
+
+  // Простенький лог, чтобы можно было проверить порядок в консоли
+  console.groupCollapsed("Image Grid Aligner – parsed indices");
+  withMeta.forEach((m) => {
+    console.log(m.item.title || m.item.alt || m.item.id, "->", m.index);
+  });
+  console.groupEnd();
 
   if (sortByNumber && anyIndex) {
     withMeta.sort((a, b) => {
@@ -64,11 +68,11 @@ function sortImages(images, sortByNumber) {
 
       if (ai !== null && bi !== null) {
         if (ai !== bi) return ai - bi;
-        // if numbers equal, fallback to geometry
+        // если числа равны, fallback к геометрии
         return compareByGeometry(a.item, b.item);
       }
 
-      if (ai !== null) return -1; // with number comes before without
+      if (ai !== null) return -1; // с номером раньше без номера
       if (bi !== null) return 1;
       return compareByGeometry(a.item, b.item);
     });
@@ -153,7 +157,7 @@ async function onAlignSubmit(event) {
       return;
     }
 
-    // 1. Sort images (by number at end of name if possible, otherwise by geometry)
+    // 1. Sort images (by number if possible, otherwise by geometry)
     images = sortImages(images, sortByNumber);
 
     // 2. Resize images if needed

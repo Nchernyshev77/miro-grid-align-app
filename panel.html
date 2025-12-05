@@ -97,7 +97,8 @@
     }
 
     input[type="number"]:focus,
-    select:focus {
+    select:focus,
+    input[type="file"]:focus {
       outline: none;
       border-color: #2563eb;
       box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
@@ -126,6 +127,34 @@
       font-size: 11px;
       opacity: 0.7;
       line-height: 1.4;
+    }
+
+    /* Progress bar for Stitch */
+    .progress-container {
+      margin-top: 8px;
+      display: none;
+    }
+
+    .progress-label {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-bottom: 4px;
+    }
+
+    .progress-outer {
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      overflow: hidden;
+    }
+
+    .progress-inner {
+      height: 100%;
+      width: 0%;
+      background: #2563eb;
+      border-radius: inherit;
+      transition: width 0.1s linear;
     }
   </style>
 </head>
@@ -230,28 +259,6 @@
       </div>
 
       <div class="field">
-        <label for="stitchHorizontalGap">Horizontal gap (px)</label>
-        <input
-          id="stitchHorizontalGap"
-          name="stitchHorizontalGap"
-          type="number"
-          step="1"
-          value="0"
-        />
-      </div>
-
-      <div class="field">
-        <label for="stitchVerticalGap">Vertical gap (px)</label>
-        <input
-          id="stitchVerticalGap"
-          name="stitchVerticalGap"
-          type="number"
-          step="1"
-          value="0"
-        />
-      </div>
-
-      <div class="field">
         <label for="stitchStartCorner">Start corner</label>
         <select id="stitchStartCorner" name="stitchStartCorner">
           <option value="top-left">Top left</option>
@@ -261,17 +268,17 @@
         </select>
       </div>
 
-      <div class="section-title">Source folder</div>
+      <div class="section-title">Source files</div>
       <div class="field">
-        <label for="stitchFolderInput">
-          Choose folder with images (files will be read in the browser)
+        <label for="stitchFilesInput">
+          Choose image files (you can select several files from a folder)
         </label>
         <input
-          id="stitchFolderInput"
-          name="stitchFolderInput"
+          id="stitchFilesInput"
+          name="stitchFilesInput"
           type="file"
-          webkitdirectory
           multiple
+          accept="image/*"
         />
       </div>
 
@@ -279,10 +286,22 @@
         Import & stitch images
       </button>
 
+      <div id="stitchProgress" class="progress-container">
+        <div id="stitchProgressText" class="progress-label">
+          Preparing…
+        </div>
+        <div class="progress-outer">
+          <div
+            class="progress-inner"
+            id="stitchProgressBar"
+          ></div>
+        </div>
+      </div>
+
       <p class="hint">
-        Choose a folder with images. Files will be sorted by name (numbers at
-        the end are taken into account), created on the board and aligned into
-        a grid using the settings above.
+        Selected files will be sorted by name (numbers at the end are taken
+        into account), created on the board and aligned into a grid using the
+        settings above. Gaps are always zero for stitching.
       </p>
     </form>
   </div>

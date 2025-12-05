@@ -11,18 +11,21 @@
     :root {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
         sans-serif;
-      color-scheme: light dark;
+      /* принудительно светлая тема */
+      color-scheme: light;
     }
 
     body {
       margin: 16px;
       font-size: 14px;
       color: #111827;
+      background: #f9fafb;
     }
 
     h1 {
       font-size: 18px;
       margin: 0 0 4px;
+      color: #0f172a;
     }
 
     .subtitle {
@@ -36,6 +39,7 @@
       margin-top: 12px;
       margin-bottom: 4px;
       font-size: 13px;
+      color: #111827;
     }
 
     .field {
@@ -58,7 +62,15 @@
       border-radius: 7px;
       border: 1px solid rgba(15, 23, 42, 0.16);
       font-size: 13px;
-      background: rgba(255, 255, 255, 0.95);
+      background: #ffffff;
+      color: #0f172a;
+    }
+
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #2563eb;
+      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
     }
 
     .checkbox-row {
@@ -162,18 +174,23 @@
     </div>
 
     <div class="checkbox-row">
-      <input type="checkbox" id="sortByNumber" checked />
+      <input
+        type="checkbox"
+        id="sortByNumber"
+        name="sortByNumber"
+        checked
+      />
       <label for="sortByNumber">
-        Sort by number in image name (if present)
+        Sort by number at the end of image name
       </label>
     </div>
 
     <button type="submit" id="align-button">Align selection</button>
 
     <p class="hint">
-      Select images on the board, then click <b>Align selection</b>. Images will
-      be ordered by number in their name (if any) and placed into a grid
-      starting from the chosen corner.
+      Select images on the board, then click <b>Align selection</b>.<br />
+      Numbers are taken from the end of the image name (e.g. <i>image_01</i>,
+      <i>image10</i>, <i>frame0003</i>).
     </p>
   </form>
 </body>

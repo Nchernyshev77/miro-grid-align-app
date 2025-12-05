@@ -6,15 +6,14 @@ const { board } = window.miro;
 /**
  * Extracts the LAST integer number from whatever name we can read.
  *
- * We intentionally делаем максимально простой и устойчивый парсер:
- * - Берём item.title, если нет — item.alt, если нет — пустую строку.
- * - Ищем последнюю группу цифр в строке (где угодно).
- * - Любое количество нулей в начале: 1, 01, 0001, 10, 011 и т.п.
+ * - Uses item.title or item.alt (fallback to empty string).
+ * - Looks for the last group of digits anywhere in the string.
+ * - Any number of leading zeros is fine: 1, 01, 0001, 10, 011 etc.
  *
- * Примеры:
+ * Examples:
  *  "tile_01"          -> 1
  *  "tile01"           -> 1
- *  "tile_0003.png"    -> 3 (если в title есть ".png")
+ *  "tile_0003.png"    -> 3
  *  "my-tile-10 (copy)"-> 10
  *  "img_42"           -> 42
  */
@@ -22,7 +21,7 @@ function extractIndexFromItem(item) {
   const raw = (item.title || item.alt || "").toString();
   if (!raw) return null;
 
-  // Берём ПОСЛЕДНЮЮ группу цифр где угодно в строке
+  // Take the LAST group of digits in the string
   const match = raw.match(/(\d+)(?!.*\d)/);
   if (!match) return null;
 
@@ -54,7 +53,7 @@ function sortImages(images, sortByNumber) {
 
   const anyIndex = withMeta.some((m) => m.index !== null);
 
-  // Простенький лог, чтобы можно было проверить порядок в консоли
+  // Debug log — можно смотреть в консоли, что именно парсится
   console.groupCollapsed("Image Grid Aligner – parsed indices");
   withMeta.forEach((m) => {
     console.log(m.item.title || m.item.alt || m.item.id, "->", m.index);
@@ -68,11 +67,11 @@ function sortImages(images, sortByNumber) {
 
       if (ai !== null && bi !== null) {
         if (ai !== bi) return ai - bi;
-        // если числа равны, fallback к геометрии
+        // if numbers equal, fallback to geometry
         return compareByGeometry(a.item, b.item);
       }
 
-      if (ai !== null) return -1; // с номером раньше без номера
+      if (ai !== null) return -1; // with number comes before without
       if (bi !== null) return 1;
       return compareByGeometry(a.item, b.item);
     });
@@ -105,23 +104,6 @@ function getFormValues() {
     startCorner,
     sortByNumber,
   };
-}
-
-/**
- * Computes grid position (row from top, col from left) for a given
- * linear index based on the chosen starting corner.
- */
-function computeGridPosition(index, cols, rows, startCorner) {
-  const rowIndex = Math.floor(index / cols);
-  const colIndex = index % cols;
-
-  const fromTop = startCorner.startsWith("top");
-  const fromLeft = startCorner.endsWith("left");
-
-  const rowFromTop = fromTop ? rowIndex : rows - 1 - rowIndex;
-  const colFromLeft = fromLeft ? colIndex : cols - 1 - colIndex;
-
-  return { rowFromTop, colFromLeft };
 }
 
 /**
@@ -198,46 +180,56 @@ async function onAlignSubmit(event) {
     const maxRight = Math.max(...bounds.map((b) => b.right));
     const maxBottom = Math.max(...bounds.map((b) => b.bottom));
 
-    // 4. Grid geometry
     const total = images.length;
     const cols = Math.max(1, imagesPerRow);
     const rows = Math.ceil(total / cols);
 
+    // Размеры ячейки и всей сетки
     const cellWidth = maxWidth + horizontalGap;
     const cellHeight = maxHeight + verticalGap;
 
     const gridWidth = cols * maxWidth + (cols - 1) * horizontalGap;
     const gridHeight = rows * maxHeight + (rows - 1) * verticalGap;
 
-    let originLeft;
-    let originTop;
+    // --- Новая логика углов ---
+    // Сначала считаем сетку так, как будто угол всегда top-left,
+    // а потом зеркалим её относительно границ сетки.
 
-    if (startCorner.startsWith("top")) {
-      originTop = minTop;
-    } else {
-      originTop = maxBottom - gridHeight;
-    }
+    const originLeftTL = minLeft;
+    const originTopTL = minTop;
 
-    if (startCorner.endsWith("left")) {
-      originLeft = minLeft;
-    } else {
-      originLeft = maxRight - gridWidth;
-    }
+    const gridLeft = originLeftTL;
+    const gridTop = originTopTL;
+    const gridRight = gridLeft + gridWidth;
+    const gridBottom = gridTop + gridHeight;
 
-    // 5. Place images into grid
     images.forEach((img, index) => {
-      const { rowFromTop, colFromLeft } = computeGridPosition(
-        index,
-        cols,
-        rows,
-        startCorner
-      );
+      // Позиция в сетке, как если бы угол был top-left
+      const rowIndex = Math.floor(index / cols);
+      const colIndex = index % cols;
 
-      const targetLeft = originLeft + colFromLeft * cellWidth;
-      const targetTop = originTop + rowFromTop * cellHeight;
+      const baseLeft = originLeftTL + colIndex * cellWidth;
+      const baseTop = originTopTL + rowIndex * cellHeight;
 
-      img.x = targetLeft + img.width / 2;
-      img.y = targetTop + img.height / 2;
+      let centerX = baseLeft + img.width / 2;
+      let centerY = baseTop + img.height / 2;
+
+      // Зеркалим в зависимости от выбранного угла
+      const fromTop = startCorner.startsWith("top");
+      const fromLeft = startCorner.endsWith("left");
+
+      if (!fromTop) {
+        // зеркалим по вертикали относительно сетки
+        centerY = gridBottom - (centerY - gridTop);
+      }
+
+      if (!fromLeft) {
+        // зеркалим по горизонтали относительно сетки
+        centerX = gridRight - (centerX - gridLeft);
+      }
+
+      img.x = centerX;
+      img.y = centerY;
     });
 
     await Promise.all(images.map((img) => img.sync()));

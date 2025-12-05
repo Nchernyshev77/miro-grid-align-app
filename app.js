@@ -12,7 +12,7 @@ function getTitle(item) {
  * Extract the LAST integer number from a string.
  * "Name_01"   -> 1
  * "Name0003"  -> 3
- * "Name 10a2" -> 2 (last group)
+ * "Name 10a2" -> 2 (последняя группа цифр)
  */
 function extractTrailingNumber(str) {
   const match = str.match(/(\d+)(?!.*\d)/);
@@ -135,4 +135,288 @@ async function alignImagesInGivenOrder(images, config) {
     }
 
     const left = originLeft + col * cellWidth;
-    const top = originTop + row * cellH*
+    const top = originTop + row * cellHeight;
+
+    img.x = left + img.width / 2;
+    img.y = top + img.height / 2;
+  });
+
+  await Promise.all(images.map((img) => img.sync()));
+}
+
+/* ---------- SORTING TAB ---------- */
+
+/**
+ * Для выделенных картинок:
+ * 1) Проверяем title.
+ * 2) Если у каких-то title пустой -> нумеруем по геометрии (top-left -> bottom-right):
+ *      img.title = "1", "2", ...
+ * 3) Строим порядок:
+ *      - картинки с числом в конце title идут первыми, по числу
+ *      - потом без числа, по алфавиту title
+ * 4) Выравниваем в сетку по этому порядку.
+ */
+async function handleSortingSubmit(event) {
+  event.preventDefault();
+
+  try {
+    const form = document.getElementById("sorting-form");
+    const imagesPerRow = Number(form.sortingImagesPerRow.value) || 1;
+    const horizontalGap = Number(form.sortingHorizontalGap.value) || 0;
+    const verticalGap = Number(form.sortingVerticalGap.value) || 0;
+    const sizeMode = form.sortingSizeMode.value;
+    const startCorner = form.sortingStartCorner.value;
+
+    const selection = await board.getSelection();
+    let images = selection.filter((i) => i.type === "image");
+
+    if (!images.length) {
+      await board.notifications.showInfo(
+        "Select at least one image on the board."
+      );
+      return;
+    }
+
+    if (imagesPerRow < 1) {
+      await board.notifications.showError(
+        "“Images per row” must be greater than 0."
+      );
+      return;
+    }
+
+    // 1) check titles
+    const hasAnyEmptyTitle = images.some((img) => !getTitle(img));
+
+    if (hasAnyEmptyTitle) {
+      // 2) number by geometry
+      const geoOrder = sortByGeometry(images);
+      let counter = 1;
+      for (const img of geoOrder) {
+        img.title = String(counter);
+        counter++;
+      }
+      await Promise.all(geoOrder.map((img) => img.sync()));
+      images = geoOrder;
+    }
+
+    // 3) sort by (number in title) + alphabet
+    const meta = images.map((img, index) => {
+      const title = getTitle(img);
+      const lower = title.toLowerCase();
+      const num = extractTrailingNumber(title);
+      const hasNumber = num !== null;
+      return { img, index, title, lower, hasNumber, num };
+    });
+
+    console.groupCollapsed("Sorting – titles & numbers");
+    meta.forEach((m) => {
+      console.log(m.title || m.img.id, "=>", m.num);
+    });
+    console.groupEnd();
+
+    meta.sort((a, b) => {
+      // numbered first
+      if (a.hasNumber && !b.hasNumber) return -1;
+      if (!a.hasNumber && b.hasNumber) return 1;
+
+      if (a.hasNumber && b.hasNumber) {
+        if (a.num !== b.num) return a.num - b.num;
+        if (a.lower < b.lower) return -1;
+        if (a.lower > b.lower) return 1;
+        return a.index - b.index;
+      }
+
+      // both without numbers: alphabet
+      if (a.lower < b.lower) return -1;
+      if (a.lower > b.lower) return 1;
+      return a.index - b.index;
+    });
+
+    const orderedImages = meta.map((m) => m.img);
+
+    await alignImagesInGivenOrder(orderedImages, {
+      imagesPerRow,
+      horizontalGap,
+      verticalGap,
+      sizeMode,
+      startCorner,
+    });
+
+    await board.notifications.showInfo(
+      `Done: aligned ${orderedImages.length} image${
+        orderedImages.length === 1 ? "" : "s"
+      }.`
+    );
+  } catch (err) {
+    console.error(err);
+    await board.notifications.showError(
+      "Something went wrong while aligning images. Please check the console."
+    );
+  }
+}
+
+/* ---------- STITCH TAB ---------- */
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Sort File objects by name:
+ *  - files with trailing number go first, sorted by that number
+ *  - then files without number, sorted alphabetically
+ */
+function sortFilesByNameWithNumber(files) {
+  const arr = Array.from(files).map((file, index) => {
+    const name = file.name || "";
+    const lower = name.toLowerCase();
+    const num = extractTrailingNumber(name);
+    return {
+      file,
+      index,
+      name,
+      lower,
+      hasNumber: num !== null,
+      num,
+    };
+  });
+
+  console.groupCollapsed("Stitch – files & numbers");
+  arr.forEach((m) => {
+    console.log(m.name, "=>", m.num);
+  });
+  console.groupEnd();
+
+  arr.sort((a, b) => {
+    if (a.hasNumber && !b.hasNumber) return -1;
+    if (!a.hasNumber && b.hasNumber) return 1;
+
+    if (a.hasNumber && b.hasNumber) {
+      if (a.num !== b.num) return a.num - b.num;
+      if (a.lower < b.lower) return -1;
+      if (a.lower > b.lower) return 1;
+      return a.index - b.index;
+    }
+
+    if (a.lower < b.lower) return -1;
+    if (a.lower > b.lower) return 1;
+    return a.index - b.index;
+  });
+
+  return arr.map((m) => m.file);
+}
+
+/**
+ * Handle Stitch tab:
+ *  - read selected files,
+ *  - sort files by name (with numeric suffix),
+ *  - create images on the board,
+ *  - align them into a grid in the chosen corner with gap = 0,
+ *  - zoom viewport to the stitched area.
+ */
+async function handleStitchSubmit(event) {
+  event.preventDefault();
+
+  const stitchButton = document.getElementById("stitchButton");
+  const progressEl = document.getElementById("stitchProgress");
+
+  try {
+    const form = document.getElementById("stitch-form");
+    const imagesPerRow = Number(form.stitchImagesPerRow.value) || 1;
+    const startCorner = form.stitchStartCorner.value;
+
+    const input = document.getElementById("stitchFolderInput");
+    const files = input.files;
+
+    if (!files || !files.length) {
+      await board.notifications.showError(
+        "Please choose one or more image files."
+      );
+      return;
+    }
+
+    if (imagesPerRow < 1) {
+      await board.notifications.showError(
+        "“Images per row” must be greater than 0."
+      );
+      return;
+    }
+
+    stitchButton.disabled = true;
+    progressEl.textContent = "Preparing files…";
+
+    const sortedFiles = sortFilesByNameWithNumber(files);
+
+    const createdImages = [];
+    const baseX = 0;
+    const baseY = 0;
+    const offsetStep = 50;
+
+    for (let i = 0; i < sortedFiles.length; i++) {
+      const file = sortedFiles[i];
+
+      progressEl.textContent = `Importing ${i + 1} / ${sortedFiles.length}…`;
+
+      const dataUrl = await readFileAsDataUrl(file);
+
+      const img = await board.createImage({
+        url: dataUrl,
+        x: baseX + (i % 5) * offsetStep,
+        y: baseY + Math.floor(i / 5) * offsetStep,
+        title: file.name, // сохраним имя файла в title (может пригодиться в Sorting)
+      });
+
+      createdImages.push(img);
+    }
+
+    progressEl.textContent = "Aligning images…";
+
+    // align with no gaps
+    await alignImagesInGivenOrder(createdImages, {
+      imagesPerRow,
+      horizontalGap: 0,
+      verticalGap: 0,
+      sizeMode: "none",
+      startCorner,
+    });
+
+    // zoom to stitched area
+    try {
+      await board.viewport.zoomTo(createdImages);
+    } catch (e) {
+      console.warn("zoomTo failed or not supported with items:", e);
+    }
+
+    progressEl.textContent = "Done.";
+    await board.notifications.showInfo(
+      `Imported and stitched ${createdImages.length} image${
+        createdImages.length === 1 ? "" : "s"
+      }.`
+    );
+  } catch (err) {
+    console.error(err);
+    progressEl.textContent = "Error.";
+    await board.notifications.showError(
+      "Something went wrong while importing images. Please check the console."
+    );
+  } finally {
+    stitchButton.disabled = false;
+    // если хочешь, можно не очищать progress, а оставить "Done."
+    // progressEl.textContent = "";
+  }
+}
+
+/* ---------- init ---------- */
+
+window.addEventListener("DOMContentLoaded", () => {
+  const sortingForm = document.getElementById("sorting-form");
+  if (sortingForm) sortingForm.addEventListener("submit", handleSortingSubmit);
+
+  const stitchForm = document.getElementById("stitch-form");
+  if (stitchForm) stitchForm.addEventListener("submit", handleStitchSubmit);
+});

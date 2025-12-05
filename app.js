@@ -6,9 +6,8 @@ const { board } = window.miro;
 /**
  * Extracts the LAST integer number from whatever name we can read.
  *
- * - Uses item.title or item.alt (fallback to empty string).
- * - Looks for the last group of digits anywhere in the string.
- * - Any number of leading zeros is fine: 1, 01, 0001, 10, 011 etc.
+ * Uses item.title or item.alt (fallback to empty string).
+ * Looks for the last group of digits anywhere in the string.
  *
  * Examples:
  *  "tile_01"          -> 1
@@ -21,7 +20,7 @@ function extractIndexFromItem(item) {
   const raw = (item.title || item.alt || "").toString();
   if (!raw) return null;
 
-  // Take the LAST group of digits in the string
+  // LAST group of digits in the string
   const match = raw.match(/(\d+)(?!.*\d)/);
   if (!match) return null;
 
@@ -53,7 +52,7 @@ function sortImages(images, sortByNumber) {
 
   const anyIndex = withMeta.some((m) => m.index !== null);
 
-  // Debug log — можно смотреть в консоли, что именно парсится
+  // Debug log — можно посмотреть в консоли порядок и индексы
   console.groupCollapsed("Image Grid Aligner – parsed indices");
   withMeta.forEach((m) => {
     console.log(m.item.title || m.item.alt || m.item.id, "->", m.index);
@@ -67,11 +66,11 @@ function sortImages(images, sortByNumber) {
 
       if (ai !== null && bi !== null) {
         if (ai !== bi) return ai - bi;
-        // if numbers equal, fallback to geometry
+        // если числа равны, fallback к геометрии
         return compareByGeometry(a.item, b.item);
       }
 
-      if (ai !== null) return -1; // with number comes before without
+      if (ai !== null) return -1; // с номером раньше без номера
       if (bi !== null) return 1;
       return compareByGeometry(a.item, b.item);
     });
@@ -157,14 +156,14 @@ async function onAlignSubmit(event) {
       await Promise.all(images.map((img) => img.sync()));
     }
 
-    // After resizing, sizes are up to date
+    // После ресайза размеры актуальны
     const widths = images.map((img) => img.width);
     const heights = images.map((img) => img.height);
 
     const maxWidth = Math.max(...widths);
     const maxHeight = Math.max(...heights);
 
-    // 3. Current bounding box of selection
+    // 3. Текущий bounding box выделения
     const bounds = images.map((img) => {
       return {
         item: img,
@@ -180,56 +179,61 @@ async function onAlignSubmit(event) {
     const maxRight = Math.max(...bounds.map((b) => b.right));
     const maxBottom = Math.max(...bounds.map((b) => b.bottom));
 
+    // 4. Геометрия сетки
     const total = images.length;
     const cols = Math.max(1, imagesPerRow);
     const rows = Math.ceil(total / cols);
 
-    // Размеры ячейки и всей сетки
     const cellWidth = maxWidth + horizontalGap;
     const cellHeight = maxHeight + verticalGap;
 
     const gridWidth = cols * maxWidth + (cols - 1) * horizontalGap;
     const gridHeight = rows * maxHeight + (rows - 1) * verticalGap;
 
-    // --- Новая логика углов ---
-    // Сначала считаем сетку так, как будто угол всегда top-left,
-    // а потом зеркалим её относительно границ сетки.
+    let originLeft;
+    let originTop;
 
-    const originLeftTL = minLeft;
-    const originTopTL = minTop;
+    // куда «прилипает» сетка относительно старого bounding box
+    if (startCorner.startsWith("top")) {
+      originTop = minTop;
+    } else {
+      originTop = maxBottom - gridHeight;
+    }
 
-    const gridLeft = originLeftTL;
-    const gridTop = originTopTL;
-    const gridRight = gridLeft + gridWidth;
-    const gridBottom = gridTop + gridHeight;
+    if (startCorner.endsWith("left")) {
+      originLeft = minLeft;
+    } else {
+      originLeft = maxRight - gridWidth;
+    }
 
+    // 5. Раскладываем по сетке
     images.forEach((img, index) => {
-      // Позиция в сетке, как если бы угол был top-left
-      const rowIndex = Math.floor(index / cols);
-      const colIndex = index % cols;
+      // базовые row/col для режима top-left
+      let row = Math.floor(index / cols); // 0..rows-1 сверху вниз
+      let col = index % cols;            // 0..cols-1 слева направо
 
-      const baseLeft = originLeftTL + colIndex * cellWidth;
-      const baseTop = originTopTL + rowIndex * cellHeight;
-
-      let centerX = baseLeft + img.width / 2;
-      let centerY = baseTop + img.height / 2;
-
-      // Зеркалим в зависимости от выбранного угла
-      const fromTop = startCorner.startsWith("top");
-      const fromLeft = startCorner.endsWith("left");
-
-      if (!fromTop) {
-        // зеркалим по вертикали относительно сетки
-        centerY = gridBottom - (centerY - gridTop);
+      // модифицируем row/col в зависимости от угла
+      switch (startCorner) {
+        case "top-left":
+          // ничего
+          break;
+        case "top-right":
+          col = cols - 1 - col;
+          break;
+        case "bottom-left":
+          row = rows - 1 - row;
+          break;
+        case "bottom-right":
+          row = rows - 1 - row;
+          col = cols - 1 - col;
+          break;
       }
 
-      if (!fromLeft) {
-        // зеркалим по горизонтали относительно сетки
-        centerX = gridRight - (centerX - gridLeft);
-      }
+      const left = originLeft + col * cellWidth;
+      const top = originTop + row * cellHeight;
 
-      img.x = centerX;
-      img.y = centerY;
+      img.x = left + img.width / 2;
+      img.y = top + img.height / 2;
     });
 
     await Promise.all(images.map((img) => img.sync()));

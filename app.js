@@ -6,12 +6,19 @@ const { board } = window.miro;
 /**
  * Extract the LAST integer number from a name (title/alt).
  * Any number of leading zeros is OK: 1, 01, 0001, 10, 011…
+ *
+ * Примеры:
+ *  "tile_01"          -> 1
+ *  "tile01"           -> 1
+ *  "tile_0003.png"    -> 3
+ *  "my-tile-10 (copy)"-> 10
+ *  "img_42"           -> 42
  */
 function extractIndexFromItem(item) {
   const raw = (item.title || item.alt || "").toString();
   if (!raw) return null;
 
-  // Last group of digits in the string
+  // Берём ПОСЛЕДНЮЮ группу цифр в строке
   const match = raw.match(/(\d+)(?!.*\d)/);
   if (!match) return null;
 
@@ -20,19 +27,20 @@ function extractIndexFromItem(item) {
 }
 
 /**
- * Sort images:
- * - если у всех есть номер и включён sortByNumber -> сортируем ЧИСТО по номеру
- * - если номера есть не у всех -> сначала по номеру, затем по исходному порядку выделения
- * - если sortByNumber выключен -> по исходному порядку выделения
+ * Строгая сортировка.
+ * Если sortByNumber = true:
+ *   - если у ВСЕХ есть номер -> сортируем только по номеру;
+ *   - если хотя бы у одной нет номера -> бросаем ошибку (выше её перехватим
+ *     и покажем пользователю), чтобы не было "каши".
+ * Если sortByNumber = false:
+ *   - сортируем просто по порядку выделения.
  */
-function sortImages(images, sortByNumber) {
+function sortImagesStrict(images, sortByNumber) {
   const meta = images.map((item, i) => ({
     item,
     index: extractIndexFromItem(item),
     orig: i, // порядок в selection
   }));
-
-  const allHaveIndex = meta.every((m) => m.index !== null);
 
   console.groupCollapsed("Image Grid Aligner – parsed indices");
   meta.forEach((m) => {
@@ -41,26 +49,24 @@ function sortImages(images, sortByNumber) {
   console.groupEnd();
 
   if (sortByNumber) {
-    if (allHaveIndex) {
-      // самый стабильный случай: только по номеру
-      meta.sort((a, b) => a.index - b.index);
-    } else {
-      // у кого есть номер — по номеру, у остальных — после, но без геометрии
-      meta.sort((a, b) => {
-        const ai = a.index;
-        const bi = b.index;
+    const missing = meta.filter((m) => m.index === null);
+    if (missing.length > 0) {
+      // Скажем пользователю, какие именно объекты без номера (по возможностям).
+      const examples = missing
+        .slice(0, 3)
+        .map((m) => m.item.title || m.item.alt || m.item.id)
+        .join(", ");
 
-        if (ai !== null && bi !== null) {
-          if (ai !== bi) return ai - bi;
-          return a.orig - b.orig; // одинаковые номера -> по исходному порядку выделения
-        }
-        if (ai !== null) return -1;
-        if (bi !== null) return 1;
-        return a.orig - b.orig;
-      });
+      throw new Error(
+        `Some selected images don't contain a number in their name. ` +
+          `Examples: ${examples}`
+      );
     }
+
+    // У всех есть номер -> сортируем строго по номеру.
+    meta.sort((a, b) => a.index - b.index);
   } else {
-    // вообще без номеров — просто по порядку выделения
+    // Без номеров -> по порядку выделения.
     meta.sort((a, b) => a.orig - b.orig);
   }
 
@@ -124,8 +130,8 @@ async function onAlignSubmit(event) {
       return;
     }
 
-    // 1. Sort images
-    images = sortImages(images, sortByNumber);
+    // 1. Строгая сортировка
+    images = sortImagesStrict(images, sortByNumber);
 
     // 2. Resize images if needed
     if (sizeMode === "width") {
@@ -195,7 +201,7 @@ async function onAlignSubmit(event) {
       let row = Math.floor(index / cols); // 0..rows-1 сверху вниз
       let col = index % cols; // 0..cols-1 слева направо
 
-      // модифицируем row/col в зависимости от угла
+      // модифицируем row/col в зависимости от выбранного угла
       switch (startCorner) {
         case "top-left":
           break;
@@ -225,9 +231,15 @@ async function onAlignSubmit(event) {
     );
   } catch (error) {
     console.error(error);
-    await board.notifications.showError(
-      "Something went wrong while aligning images. Please check the console."
-    );
+
+    // Если проблема именно с номерами — покажем понятный текст
+    if (error.message && error.message.startsWith("Some selected images")) {
+      await board.notifications.showError(error.message);
+    } else {
+      await board.notifications.showError(
+        "Something went wrong while aligning images. Please check the console."
+      );
+    }
   }
 }
 

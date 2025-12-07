@@ -10,6 +10,8 @@ function getTitle(item) {
 
 /**
  * Попробовать вытащить URL картинки из разных полей виджета.
+ * Сейчас используем только в Stitch, когда ещё есть dataURL;
+ * для Sorting по цвету URL больше не нужен.
  */
 function getImageUrlFromWidget(widget) {
   if (!widget) return null;
@@ -307,57 +309,49 @@ async function sortImagesByNumber(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: by color / brightness ---------- */
+/* ---------- SORTING: by color code in title ---------- */
 
 /**
- * Сортировка по средней яркости:
- *  - пытаемся посчитать яркость по URL (для всех картинок, у которых он есть),
- *  - если ни для кого не получилось — fallback на геометрию.
- * Для картинок, созданных через Stitch, URL всегда есть (data:…),
- * поэтому сортировка по цвету будет работать стабильно.
+ * Color-sort: читаем префикс вида "C0000 " из title
+ * (он выставляется во время импорта через Stitch),
+ * и сортируем по нему.
+ *
+ * Если ни у одной картинки нет такого префикса — fallback на геометрию.
  */
 async function sortImagesByColor(images) {
-  const meta = [];
+  const meta = images.map((img, index) => {
+    const title = getTitle(img);
+    const match = title.match(/^C(\d{4})\s+/); // C#### в начале
+    const code = match ? Number.parseInt(match[1], 10) : null;
+    return { img, index, title, code };
+  });
 
-  for (const imgItem of images) {
-    const url = getImageUrlFromWidget(imgItem);
-    if (!url) {
-      console.warn("No URL found for image (no color data):", imgItem.id);
-      continue;
-    }
-
-    try {
-      const img = await loadImage(url);
-      const y = getBlurredAverageLuminanceFromImageElement(img);
-      if (y == null) {
-        console.warn(
-          "Failed to compute blurred luminance, fallback neutral:",
-          imgItem.id
-        );
-        meta.push({ img: imgItem, y: 0.5 });
-      } else {
-        meta.push({ img: imgItem, y });
-      }
-    } catch (e) {
-      console.error("Error reading image for brightness sort", imgItem.id, e);
-      meta.push({ img: imgItem, y: 0.5 });
-    }
-  }
-
-  if (!meta.length) {
+  const anyCode = meta.some((m) => m.code !== null);
+  if (!anyCode) {
     console.warn(
-      "Could not compute brightness for any image, falling back to geometry sort."
+      "No color codes found in titles; falling back to geometry sort."
     );
     return sortByGeometry(images);
   }
 
-  console.groupCollapsed("Sorting (brightness) – luminance");
+  console.groupCollapsed("Sorting (color-code) – titles & codes");
   meta.forEach((m) => {
-    console.log(m.img.title || m.img.id, "=>", `y=${m.y.toFixed(3)}`);
+    console.log(m.title || m.img.id, "=>", m.code);
   });
   console.groupEnd();
 
-  meta.sort((a, b) => b.y - a.y); // ярче -> раньше
+  meta.sort((a, b) => {
+    const ac = a.code;
+    const bc = b.code;
+
+    if (ac != null && bc != null) {
+      if (ac !== bc) return ac - bc; // код меньше -> светлее -> раньше
+      return a.index - b.index;
+    }
+    if (ac != null) return -1;
+    if (bc != null) return 1;
+    return a.index - b.index;
+  });
 
   return meta.map((m) => m.img);
 }
@@ -400,7 +394,7 @@ async function handleSortingSubmit(event) {
     let orderedImages;
 
     if (sortMode === "color") {
-      await board.notifications.showInfo("Sorting by brightness…");
+      await board.notifications.showInfo("Sorting by color code…");
       orderedImages = await sortImagesByColor(images);
     } else {
       orderedImages = await sortImagesByNumber(images);
@@ -497,9 +491,11 @@ function sortFilesByNameWithNumber(files) {
 
 /**
  * Stitch:
- *  - читаем выбранные файлы,
- *  - сортируем (или рандомим) по имени,
- *  - создаём картинки на доске,
+ *  - читаем выбранные файлы в dataURL,
+ *  - считаем яркость каждого файла,
+ *  - для каждого считаем colorCode ∈ [0000..9999],
+ *  - сортируем/рандомим по имени (как раньше),
+ *  - создаём картинки на доске с title: "Cxxxx originalName",
  *  - выравниваем без gap,
  *  - зумим в область.
  */
@@ -534,29 +530,73 @@ async function handleStitchSubmit(event) {
     }
 
     if (stitchButton) stitchButton.disabled = true;
-    if (progressEl) progressEl.textContent = "Preparing files…";
+    if (progressEl) progressEl.textContent = "Reading files…";
 
-    const sortedFiles = sortFilesByNameWithNumber(files);
+    const filesArray = Array.from(files);
+    const fileInfos = [];
+
+    // 1. читаем dataURL и считаем яркость + colorCode
+    for (let i = 0; i < filesArray.length; i++) {
+      const file = filesArray[i];
+
+      if (progressEl) {
+        progressEl.textContent = `Processing ${i + 1} / ${filesArray.length}…`;
+      }
+
+      const dataUrl = await readFileAsDataUrl(file);
+
+      let brightness = 0.5;
+      try {
+        const imgEl = await loadImage(dataUrl);
+        const y = getBlurredAverageLuminanceFromImageElement(imgEl);
+        if (y != null) brightness = y;
+      } catch (e) {
+        console.warn(
+          "Failed to compute brightness for stitched image:",
+          file.name,
+          e
+        );
+      }
+
+      // ярче -> меньший код
+      const rawCode = Math.round((1 - brightness) * 9999);
+      const colorCode = Math.max(0, Math.min(9999, rawCode));
+
+      fileInfos.push({ file, dataUrl, brightness, colorCode });
+    }
+
+    // 2. порядок по имени/номеру (как раньше)
+    if (progressEl) progressEl.textContent = "Ordering files…";
+
+    const orderedFiles = sortFilesByNameWithNumber(filesArray);
+    const infoByFile = new Map();
+    fileInfos.forEach((info) => infoByFile.set(info.file, info));
+
+    const orderedInfos = orderedFiles.map((f) => infoByFile.get(f));
+
+    // 3. создаём виджеты
+    if (progressEl) progressEl.textContent = "Creating images…";
 
     const createdImages = [];
     const baseX = 0;
     const baseY = 0;
     const offsetStep = 50;
 
-    for (let i = 0; i < sortedFiles.length; i++) {
-      const file = sortedFiles[i];
+    const padColor = (n) => String(n).padStart(4, "0");
+
+    for (let i = 0; i < orderedInfos.length; i++) {
+      const info = orderedInfos[i];
+      const title = `C${padColor(info.colorCode)} ${info.file.name}`;
 
       if (progressEl) {
-        progressEl.textContent = `Importing ${i + 1} / ${sortedFiles.length}…`;
+        progressEl.textContent = `Creating ${i + 1} / ${orderedInfos.length}…`;
       }
 
-      const dataUrl = await readFileAsDataUrl(file);
-
       const img = await board.createImage({
-        url: dataUrl,
+        url: info.dataUrl,
         x: baseX + (i % 5) * offsetStep,
         y: baseY + Math.floor(i / 5) * offsetStep,
-        title: file.name,
+        title,
       });
 
       createdImages.push(img);

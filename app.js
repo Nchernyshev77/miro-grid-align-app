@@ -134,13 +134,11 @@ function rgbToHsl(r, g, b) {
 /**
  * Align images in the order they are given in `images` array.
  *
- * Горизонтально:
- *   - внутри строки картинки идут одна за другой;
- *   - расстояние между ними всегда = horizontalGap.
- *
- * Вертикально:
- *   - высота строки = max высота картинок в этой строке;
- *   - расстояние между строками = verticalGap.
+ * Горизонтально: картинки в строке идут одна за другой,
+ * расстояние между ними = horizontalGap.
+ * Вертикально: строки идут друг под другом,
+ * расстояние между строками = verticalGap,
+ * высота строки = max высота картинки в этой строке.
  *
  * `config`:
  *  - imagesPerRow
@@ -179,7 +177,7 @@ async function alignImagesInGivenOrder(images, config) {
   const cols = Math.max(1, imagesPerRow);
   const rows = Math.ceil(total / cols);
 
-  // Разбиваем индексы на строки
+  // Разбиваем на строки
   const rowsIndices = [];
   for (let r = 0; r < rows; r++) {
     rowsIndices.push([]);
@@ -189,7 +187,7 @@ async function alignImagesInGivenOrder(images, config) {
     rowsIndices[r].push(i);
   }
 
-  // Высота и ширина каждой строки (с учётом horizontalGap)
+  // Высота и ширина каждой строки
   const rowHeights = new Array(rows).fill(0);
   const rowWidths = new Array(rows).fill(0);
 
@@ -212,7 +210,7 @@ async function alignImagesInGivenOrder(images, config) {
     rowHeights.reduce((sum, h) => sum + h, 0) +
     verticalGap * Math.max(0, rows - 1);
 
-  // Y-координаты верхней границы каждой строки (für top-left origin)
+  // Y-координаты верхней границы каждой строки (top-left, origin (0,0))
   const rowTop = new Array(rows).fill(0);
   for (let r = 1; r < rows; r++) {
     rowTop[r] = rowTop[r - 1] + rowHeights[r - 1] + verticalGap;
@@ -355,16 +353,15 @@ async function sortImagesByNumber(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: by color (gray first + luminance) ---------- */
+/* ---------- SORTING: by color (gray first, with luminance) ---------- */
 
 /**
  * Сортировка по среднему цвету:
  *  1) сначала серо-белые (низкая насыщенность),
  *  2) потом цветные.
- * Внутри каждой группы:
- *  - сортируем по яркости Y (luminance) по убыванию (светлые → тёмные);
- *  - если Y одинаковая — по l по убыванию как запасной вариант.
- * Если совсем не удалось посчитать цвет — fallback на sortByGeometry.
+ * Внутри каждой группы сортируем по яркости Y (luminance) от светлого к тёмному:
+ *  чем выше Y, тем раньше картинка.
+ * Если совсем не получилось посчитать цвет — fallback на sortByGeometry.
  */
 async function sortImagesByColor(images) {
   const meta = [];
@@ -381,6 +378,7 @@ async function sortImagesByColor(images) {
       const avg = getAverageColorFromImageElement(img);
       if (!avg) {
         console.warn("Failed to compute color, fallback neutral:", imgItem.id);
+        // нейтральная серая, средняя яркость
         meta.push({
           img: imgItem,
           h: 0,
@@ -396,7 +394,8 @@ async function sortImagesByColor(images) {
       const { h, s, l } = rgbToHsl(r, g, b);
 
       // яркость (luminance) в [0..1]
-      const y = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      const y =
+        (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
       const SAT_GRAY_THRESHOLD = 0.1;
       const isGray = s < SAT_GRAY_THRESHOLD;
@@ -419,4 +418,263 @@ async function sortImagesByColor(images) {
     console.warn(
       "Could not compute colors for any image, falling back to geometry sort."
     );
-    return sortByGeom
+    return sortByGeometry(images);
+  }
+
+  console.groupCollapsed("Sorting (color) – HSL + luminance");
+  meta.forEach((m) => {
+    console.log(
+      m.img.title || m.img.id,
+      "=>",
+      `gray=${m.isGray}, h=${m.h.toFixed(1)}, s=${m.s.toFixed(
+        2
+      )}, l=${m.l.toFixed(2)}, y=${m.y.toFixed(3)}`
+    );
+  });
+  console.groupEnd();
+
+  // 1) серо-белые (isGray=true) раньше цветных
+  // 2) внутри группы: по яркости Y по убыванию (светлые -> тёмные)
+  // 3) если Y одинаковая — по l по убыванию как запасной критерий
+  meta.sort((a, b) => {
+    if (a.isGray && !b.isGray) return -1;
+    if (!a.isGray && b.isGray) return 1;
+
+    if (a.y !== b.y) return b.y - a.y; // ярче — раньше
+    if (a.l !== b.l) return b.l - a.l;
+    return 0;
+  });
+
+  return meta.map((m) => m.img);
+}
+
+/* ---------- SORTING: main handler ---------- */
+
+async function handleSortingSubmit(event) {
+  event.preventDefault();
+
+  try {
+    const form = document.getElementById("sorting-form");
+    if (!form) return;
+
+    const imagesPerRow = Number(form.sortingImagesPerRow.value) || 1;
+    const horizontalGap = Number(form.sortingHorizontalGap.value) || 0;
+    const verticalGap = Number(form.sortingVerticalGap.value) || 0;
+    const sizeMode = form.sortingSizeMode.value;
+    const startCorner = form.sortingStartCorner.value;
+
+    const sortModeEl = document.getElementById("sortingSortMode");
+    const sortMode = sortModeEl ? sortModeEl.value : "number";
+
+    const selection = await board.getSelection();
+    let images = selection.filter((i) => i.type === "image");
+
+    if (!images.length) {
+      await board.notifications.showInfo(
+        "Select at least one image on the board."
+      );
+      return;
+    }
+
+    if (imagesPerRow < 1) {
+      await board.notifications.showError(
+        "“Images per row” must be greater than 0."
+      );
+      return;
+    }
+
+    let orderedImages;
+
+    if (sortMode === "color") {
+      await board.notifications.showInfo("Sorting by average color…");
+      orderedImages = await sortImagesByColor(images);
+    } else {
+      orderedImages = await sortImagesByNumber(images);
+    }
+
+    await alignImagesInGivenOrder(orderedImages, {
+      imagesPerRow,
+      horizontalGap,
+      verticalGap,
+      sizeMode,
+      startCorner,
+    });
+
+    await board.notifications.showInfo(
+      `Done: aligned ${orderedImages.length} image${
+        orderedImages.length === 1 ? "" : "s"
+      }.`
+    );
+  } catch (err) {
+    console.error(err);
+    await board.notifications.showError(
+      "Something went wrong while aligning images. Please check the console."
+    );
+  }
+}
+
+/* ---------- STITCH TAB ---------- */
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Sort File objects by name:
+ *  - files with trailing number go first, sorted by that number
+ *  - then files without number, sorted alphabetically
+ */
+function sortFilesByNameWithNumber(files) {
+  const arr = Array.from(files).map((file, index) => {
+    const name = file.name || "";
+    const lower = name.toLowerCase();
+    const num = extractTrailingNumber(name);
+    return {
+      file,
+      index,
+      name,
+      lower,
+      hasNumber: num !== null,
+      num,
+    };
+  });
+
+  console.groupCollapsed("Stitch – files & numbers");
+  arr.forEach((m) => {
+    console.log(m.name, "=>", m.num);
+  });
+  console.groupEnd();
+
+  arr.sort((a, b) => {
+    if (a.hasNumber && !b.hasNumber) return -1;
+    if (!a.hasNumber && b.hasNumber) return 1;
+
+    if (a.hasNumber && b.hasNumber) {
+      if (a.num !== b.num) return a.num - b.num;
+      if (a.lower < b.lower) return -1;
+      if (a.lower > b.lower) return 1;
+      return a.index - b.index;
+    }
+
+    if (a.lower < b.lower) return -1;
+    if (a.lower > b.lower) return 1;
+    return a.index - b.index;
+  });
+
+  return arr.map((m) => m.file);
+}
+
+/**
+ * Handle Stitch tab:
+ *  - read selected files,
+ *  - sort files by name (with numeric suffix),
+ *  - create images on the board,
+ *  - align them into a grid with no gaps,
+ *  - zoom viewport to the stitched area.
+ */
+async function handleStitchSubmit(event) {
+  event.preventDefault();
+
+  const stitchButton = document.getElementById("stitchButton");
+  const progressEl = document.getElementById("stitchProgress");
+
+  try {
+    const form = document.getElementById("stitch-form");
+    if (!form) return;
+
+    const imagesPerRow = Number(form.stitchImagesPerRow.value) || 1;
+    const startCorner = form.stitchStartCorner.value;
+
+    const input = document.getElementById("stitchFolderInput");
+    const files = input ? input.files : null;
+
+    if (!files || !files.length) {
+      await board.notifications.showError(
+        "Please choose one or more image files."
+      );
+      return;
+    }
+
+    if (imagesPerRow < 1) {
+      await board.notifications.showError(
+        "“Images per row” must be greater than 0."
+      );
+      return;
+    }
+
+    if (stitchButton) stitchButton.disabled = true;
+    if (progressEl) progressEl.textContent = "Preparing files…";
+
+    const sortedFiles = sortFilesByNameWithNumber(files);
+
+    const createdImages = [];
+    const baseX = 0;
+    const baseY = 0;
+    const offsetStep = 50;
+
+    for (let i = 0; i < sortedFiles.length; i++) {
+      const file = sortedFiles[i];
+
+      if (progressEl) {
+        progressEl.textContent = `Importing ${i + 1} / ${sortedFiles.length}…`;
+      }
+
+      const dataUrl = await readFileAsDataUrl(file);
+
+      const img = await board.createImage({
+        url: dataUrl,
+        x: baseX + (i % 5) * offsetStep,
+        y: baseY + Math.floor(i / 5) * offsetStep,
+        title: file.name,
+      });
+
+      createdImages.push(img);
+    }
+
+    if (progressEl) progressEl.textContent = "Aligning images…";
+
+    await alignImagesInGivenOrder(createdImages, {
+      imagesPerRow,
+      horizontalGap: 0,
+      verticalGap: 0,
+      sizeMode: "none",
+      startCorner,
+    });
+
+    try {
+      await board.viewport.zoomTo(createdImages);
+    } catch (e) {
+      console.warn("zoomTo failed or not supported with items:", e);
+    }
+
+    if (progressEl) progressEl.textContent = "Done.";
+    await board.notifications.showInfo(
+      `Imported and stitched ${createdImages.length} image${
+        createdImages.length === 1 ? "" : "s"
+      }.`
+    );
+  } catch (err) {
+    console.error(err);
+    if (progressEl) progressEl.textContent = "Error.";
+    await board.notifications.showError(
+      "Something went wrong while importing images. Please check the console."
+    );
+  } finally {
+    if (stitchButton) stitchButton.disabled = false;
+  }
+}
+
+/* ---------- init ---------- */
+
+window.addEventListener("DOMContentLoaded", () => {
+  const sortingForm = document.getElementById("sorting-form");
+  if (sortingForm) sortingForm.addEventListener("submit", handleSortingSubmit);
+
+  const stitchForm = document.getElementById("stitch-form");
+  if (stitchForm) stitchForm.addEventListener("submit", handleStitchSubmit);
+});

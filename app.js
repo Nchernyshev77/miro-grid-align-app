@@ -72,9 +72,9 @@ function getAverageColorFromImageElement(img, smallSize = 50) {
     return null;
   }
 
-  let r = 0,
-    g = 0,
-    b = 0;
+  let r = 0;
+  let g = 0;
+  let b = 0;
   const totalPixels = width * height;
 
   for (let i = 0; i < data.length; i += 4) {
@@ -121,6 +121,8 @@ function rgbToHsl(r, g, b) {
       case b:
         h = (r - g) / d + 4;
         break;
+      default:
+        h = 0;
     }
 
     h *= 60;
@@ -177,32 +179,22 @@ async function alignImagesInGivenOrder(images, config) {
   const cols = Math.max(1, imagesPerRow);
   const rows = Math.ceil(total / cols);
 
-  // Разбиваем на строки
-  const rowsIndices = [];
-  for (let r = 0; r < rows; r++) {
-    rowsIndices.push([]);
-  }
-  for (let i = 0; i < total; i++) {
-    const r = Math.floor(i / cols);
-    rowsIndices[r].push(i);
-  }
-
-  // Высота и ширина каждой строки
+  // --- вычисляем размеры строк ---
   const rowHeights = new Array(rows).fill(0);
   const rowWidths = new Array(rows).fill(0);
 
-  for (let r = 0; r < rows; r++) {
-    let maxH = 0;
-    let width = 0;
-    const indices = rowsIndices[r];
-    for (let j = 0; j < indices.length; j++) {
-      const img = images[indices[j]];
-      if (img.height > maxH) maxH = img.height;
-      if (j > 0) width += horizontalGap;
-      width += img.width;
+  for (let i = 0; i < total; i++) {
+    const r = Math.floor(i / cols);
+    const img = images[i];
+
+    if (img.height > rowHeights[r]) {
+      rowHeights[r] = img.height;
     }
-    rowHeights[r] = maxH;
-    rowWidths[r] = width;
+
+    if (rowWidths[r] > 0) {
+      rowWidths[r] += horizontalGap;
+    }
+    rowWidths[r] += img.width;
   }
 
   const gridWidth = rowWidths.length ? Math.max(...rowWidths) : 0;
@@ -210,35 +202,31 @@ async function alignImagesInGivenOrder(images, config) {
     rowHeights.reduce((sum, h) => sum + h, 0) +
     verticalGap * Math.max(0, rows - 1);
 
-  // Y-координаты верхней границы каждой строки (top-left, origin (0,0))
+  // Y-координата верхней границы каждой строки (в top-left системе)
   const rowTop = new Array(rows).fill(0);
   for (let r = 1; r < rows; r++) {
     rowTop[r] = rowTop[r - 1] + rowHeights[r - 1] + verticalGap;
   }
 
-  // Базовые координаты (top-left ориентация, origin (0,0))
+  // базовые координаты (top-left, origin (0,0))
   const baseX = new Array(total).fill(0);
   const baseY = new Array(total).fill(0);
+  const rowCursorX = new Array(rows).fill(0);
 
-  for (let r = 0; r < rows; r++) {
-    const indices = rowsIndices[r];
-    const top = rowTop[r];
-    const centerY = top + rowHeights[r] / 2;
+  for (let i = 0; i < total; i++) {
+    const r = Math.floor(i / cols);
+    const img = images[i];
 
-    let cursorX = 0;
-    for (let j = 0; j < indices.length; j++) {
-      const idx = indices[j];
-      const img = images[idx];
+    const centerY = rowTop[r] + rowHeights[r] / 2;
+    const centerX = rowCursorX[r] + img.width / 2;
 
-      const centerX = cursorX + img.width / 2;
-      baseX[idx] = centerX;
-      baseY[idx] = centerY;
+    baseX[i] = centerX;
+    baseY[i] = centerY;
 
-      cursorX += img.width + horizontalGap;
-    }
+    rowCursorX[r] += img.width + horizontalGap;
   }
 
-  // Текущее bounding box выделения (чтобы приклеить сетку к нему)
+  // текущее bounding box выделения
   const bounds = images.map((img) => ({
     left: img.x - img.width / 2,
     top: img.y - img.height / 2,
@@ -251,7 +239,6 @@ async function alignImagesInGivenOrder(images, config) {
   const maxRight = Math.max(...bounds.map((b) => b.right));
   const maxBottom = Math.max(...bounds.map((b) => b.bottom));
 
-  // Определяем, нужно ли зеркалить по X/Y и куда ставить origin.
   let originLeft;
   let originTop;
   let flipX = false;
@@ -283,17 +270,12 @@ async function alignImagesInGivenOrder(images, config) {
       originTop = minTop;
   }
 
-  // Применяем зеркалирование и смещение
   for (let i = 0; i < total; i++) {
     let x0 = baseX[i];
     let y0 = baseY[i];
 
-    if (flipX) {
-      x0 = gridWidth - x0;
-    }
-    if (flipY) {
-      y0 = gridHeight - y0;
-    }
+    if (flipX) x0 = gridWidth - x0;
+    if (flipY) y0 = gridHeight - y0;
 
     const img = images[i];
     img.x = originLeft + x0;
@@ -378,7 +360,6 @@ async function sortImagesByColor(images) {
       const avg = getAverageColorFromImageElement(img);
       if (!avg) {
         console.warn("Failed to compute color, fallback neutral:", imgItem.id);
-        // нейтральная серая, средняя яркость
         meta.push({
           img: imgItem,
           h: 0,
@@ -394,8 +375,7 @@ async function sortImagesByColor(images) {
       const { h, s, l } = rgbToHsl(r, g, b);
 
       // яркость (luminance) в [0..1]
-      const y =
-        (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      const y = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
       const SAT_GRAY_THRESHOLD = 0.1;
       const isGray = s < SAT_GRAY_THRESHOLD;
@@ -433,15 +413,17 @@ async function sortImagesByColor(images) {
   });
   console.groupEnd();
 
-  // 1) серо-белые (isGray=true) раньше цветных
-  // 2) внутри группы: по яркости Y по убыванию (светлые -> тёмные)
-  // 3) если Y одинаковая — по l по убыванию как запасной критерий
   meta.sort((a, b) => {
+    // серо-белые раньше цветных
     if (a.isGray && !b.isGray) return -1;
     if (!a.isGray && b.isGray) return 1;
 
-    if (a.y !== b.y) return b.y - a.y; // ярче — раньше
+    // внутри группы: по яркости (Y) от светлого к тёмному
+    if (a.y !== b.y) return b.y - a.y;
+
+    // запасной критерий — по l
     if (a.l !== b.l) return b.l - a.l;
+
     return 0;
   });
 

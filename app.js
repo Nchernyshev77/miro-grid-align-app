@@ -34,7 +34,7 @@ function sortByGeometry(images) {
   });
 }
 
-/* ---------- helpers: colors / brightness ---------- */
+/* ---------- helpers: image loading & brightness ---------- */
 
 /**
  * Load image by URL into <img> (with CORS support).
@@ -50,17 +50,15 @@ function loadImage(url) {
 }
 
 /**
- * Compute *trimmed* average luminance (яркость) Y в [0..1].
+ * Compute average luminance (яркость) Y в [0..1] из размытого изображения.
  * - уменьшаем картинку до smallSize x smallSize;
- * - считаем яркость каждого пикселя;
- * - сортируем массив яркостей;
- * - отбрасываем нижние и верхние trimRatio частей (например 10% и 10%);
- * - усредняем середину.
+ * - применяем Gaussian blur radius ~ blurPx;
+ * - считаем среднюю яркость по всем пикселям.
  */
-function getTrimmedLuminanceFromImageElement(
+function getBlurredAverageLuminanceFromImageElement(
   img,
   smallSize = 50,
-  trimRatio = 0.1
+  blurPx = 3
 ) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -71,7 +69,18 @@ function getTrimmedLuminanceFromImageElement(
   canvas.width = width;
   canvas.height = height;
 
+  // включаем blur, если браузер поддерживает фильтры
+  const prevFilter = ctx.filter || "none";
+  try {
+    ctx.filter = `blur(${blurPx}px)`;
+  } catch (e) {
+    // если вдруг не поддерживается, просто игнорируем
+  }
+
   ctx.drawImage(img, 0, 0, width, height);
+
+  // возвращаем filter назад, чтобы не влиять на другие операции
+  ctx.filter = prevFilter;
 
   let imageData;
   try {
@@ -82,7 +91,8 @@ function getTrimmedLuminanceFromImageElement(
   }
 
   const data = imageData.data;
-  const luminances = [];
+  let sumY = 0;
+  const totalPixels = width * height;
 
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
@@ -90,26 +100,11 @@ function getTrimmedLuminanceFromImageElement(
     const b = data[i + 2];
     // стандарная формула яркости (sRGB)
     const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    luminances.push(y);
+    sumY += y;
   }
 
-  if (!luminances.length) return null;
-
-  luminances.sort((a, b) => a - b);
-
-  const n = luminances.length;
-  const cut = Math.floor(n * trimRatio);
-  const start = cut;
-  const end = n - cut;
-  const count = Math.max(1, end - start);
-
-  let sum = 0;
-  for (let i = start; i < end; i++) {
-    sum += luminances[i];
-  }
-
-  const avg = sum / count;
-  return avg / 255; // в [0..1]
+  const avgY = sumY / totalPixels; // 0..255
+  return avgY / 255; // 0..1
 }
 
 /* ---------- helpers: alignment ---------- */
@@ -316,14 +311,13 @@ async function sortImagesByNumber(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: by "color" == brightness ---------- */
+/* ---------- SORTING: by "color" == brightness with blur ---------- */
 
 /**
  * Сортировка по средней яркости:
- *  - считаем trimmed-luminance по всей картинке (без обрезания области),
- *  - сортируем по яркости Y в [0..1] по убыванию:
- *      чем светлее плитка, тем раньше.
- * Если не получилось посчитать яркость ни для кого — fallback на sortByGeometry.
+ *  - уменьшаем картинку, размазываем (Gaussian blur),
+ *  - считаем среднюю яркость Y в [0..1],
+ *  - сортируем по Y по убыванию (чем светлее плитка, тем раньше).
  */
 async function sortImagesByColor(images) {
   const meta = [];
@@ -337,23 +331,20 @@ async function sortImagesByColor(images) {
 
     try {
       const img = await loadImage(url);
-      const y = getTrimmedLuminanceFromImageElement(img);
+      const y = getBlurredAverageLuminanceFromImageElement(img);
       if (y == null) {
-        console.warn("Failed to compute luminance, fallback neutral:", imgItem.id);
-        meta.push({
-          img: imgItem,
-          y: 0.5,
-        });
+        console.warn(
+          "Failed to compute blurred luminance, fallback neutral:",
+          imgItem.id
+        );
+        meta.push({ img: imgItem, y: 0.5 });
         continue;
       }
 
       meta.push({ img: imgItem, y });
     } catch (e) {
-      console.error("Error reading image for color/brightness sort", imgItem.id, e);
-      meta.push({
-        img: imgItem,
-        y: 0.5,
-      });
+      console.error("Error reading image for brightness sort", imgItem.id, e);
+      meta.push({ img: imgItem, y: 0.5 });
     }
   }
 
@@ -364,7 +355,7 @@ async function sortImagesByColor(images) {
     return sortByGeometry(images);
   }
 
-  console.groupCollapsed("Sorting (brightness) – trimmed luminance");
+  console.groupCollapsed("Sorting (brightness + blur) – luminance");
   meta.forEach((m) => {
     console.log(m.img.title || m.img.id, "=>", `y=${m.y.toFixed(3)}`);
   });

@@ -47,12 +47,18 @@
       border: 1px solid rgba(15, 23, 42, 0.15);
       background: #e5e7eb;
       cursor: pointer;
+      color: #000; /* неактивные – чёрный текст */
+      transition: background 0.15s ease, color 0.15s ease, transform 0.05s ease;
     }
 
     .tab-btn.active {
       background: #2563eb;
-      color: #ffffff;
+      color: #ffffff; /* активные – белый текст */
       border-color: #2563eb;
+    }
+
+    .tab-btn:active {
+      transform: translateY(1px);
     }
 
     .tab-content {
@@ -78,14 +84,25 @@
       margin-bottom: 8px;
     }
 
+    .field-row-two {
+      flex-direction: row;
+      gap: 8px;
+    }
+
+    .field-row-two .subfield {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
     label {
       font-size: 12px;
       opacity: 0.8;
     }
 
     input[type="number"],
-    select,
-    input[type="file"] {
+    select {
       width: 100%;
       box-sizing: border-box;
       padding: 6px 8px;
@@ -103,7 +120,7 @@
       box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
     }
 
-    button {
+    button.primary {
       margin-top: 12px;
       width: 100%;
       padding: 8px 10px;
@@ -114,11 +131,16 @@
       cursor: pointer;
       background: #2563eb;
       color: #ffffff;
+      transition: background 0.15s ease, transform 0.05s ease;
     }
 
-    button:disabled {
+    button.primary:disabled {
       opacity: 0.6;
       cursor: default;
+    }
+
+    button.primary:active:not(:disabled) {
+      transform: translateY(1px);
     }
 
     .hint {
@@ -126,6 +148,40 @@
       font-size: 11px;
       opacity: 0.7;
       line-height: 1.4;
+    }
+
+    /* кастомный файл-пикер */
+
+    .file-picker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .file-picker-button {
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #111827;
+      background: #ffffff;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.05s ease;
+      color: #000;
+    }
+
+    .file-picker-button:active {
+      transform: translateY(1px);
+    }
+
+    .file-picker-label {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    #stitchFolderInput {
+      display: none;
     }
   </style>
 </head>
@@ -144,8 +200,9 @@
   <div id="tab-sorting" class="tab-content active">
     <form id="sorting-form">
       <div class="section-title">Grid</div>
+
       <div class="field">
-        <label for="sortingImagesPerRow">Images per row</label>
+        <label for="sortingImagesPerRow">Rows</label>
         <input
           id="sortingImagesPerRow"
           name="sortingImagesPerRow"
@@ -157,32 +214,33 @@
         />
       </div>
 
-      <div class="field">
-        <label for="sortingHorizontalGap">Horizontal gap (px)</label>
-        <input
-          id="sortingHorizontalGap"
-          name="sortingHorizontalGap"
-          type="number"
-          step="1"
-          value="0"
-        />
+      <div class="field field-row-two">
+        <div class="subfield">
+          <label for="sortingHorizontalGap">Gap X</label>
+          <input
+            id="sortingHorizontalGap"
+            name="sortingHorizontalGap"
+            type="number"
+            step="1"
+            value="0"
+          />
+        </div>
+        <div class="subfield">
+          <label for="sortingVerticalGap">Gap Y</label>
+          <input
+            id="sortingVerticalGap"
+            name="sortingVerticalGap"
+            type="number"
+            step="1"
+            value="0"
+          />
+        </div>
       </div>
 
       <div class="field">
-        <label for="sortingVerticalGap">Vertical gap (px)</label>
-        <input
-          id="sortingVerticalGap"
-          name="sortingVerticalGap"
-          type="number"
-          step="1"
-          value="0"
-        />
-      </div>
-
-      <div class="field">
-        <label for="sortingSizeMode">Resize images</label>
+        <label for="sortingSizeMode">Resize</label>
         <select id="sortingSizeMode" name="sortingSizeMode">
-          <option value="none" selected>Don't resize</option>
+          <option value="none" selected>Do not resize</option>
           <option value="width">Match width</option>
           <option value="height">Match height</option>
         </select>
@@ -198,26 +256,17 @@
         </select>
       </div>
 
-      <div class="section-title">Sort mode</div>
       <div class="field">
         <label for="sortingSortMode">Sort by</label>
         <select id="sortingSortMode" name="sortingSortMode">
-          <option value="number" selected>Number (title / auto)</option>
-          <option value="color">Average color</option>
+          <option value="number" selected>Number</option>
+          <option value="color">Color</option>
         </select>
       </div>
 
-      <button type="submit" id="sortingAlignButton">
+      <button type="submit" id="sortingAlignButton" class="primary">
         Align selection
       </button>
-
-      <p class="hint">
-        <b>Number:</b> if some images don't have a title, they will be numbered
-        by geometry (top-left to bottom-right) and the number will be saved into
-        the title. Then images are aligned in a grid using numbers in titles.<br />
-        <b>Average color:</b> images are sorted by their average color (hue),
-        grayscale images go last.
-      </p>
     </form>
   </div>
 
@@ -225,8 +274,9 @@
   <div id="tab-stitch" class="tab-content">
     <form id="stitch-form">
       <div class="section-title">Grid</div>
+
       <div class="field">
-        <label for="stitchImagesPerRow">Images per row</label>
+        <label for="stitchImagesPerRow">Rows</label>
         <input
           id="stitchImagesPerRow"
           name="stitchImagesPerRow"
@@ -250,54 +300,33 @@
 
       <div class="section-title">Source files</div>
       <div class="field">
-        <label for="stitchFolderInput">
-          Choose one or more image files (you can select multiple in the dialog)
-        </label>
-        <input
-          id="stitchFolderInput"
-          name="stitchFolderInput"
-          type="file"
-          multiple
-          accept="image/*"
-        />
+        <div class="file-picker">
+          <button
+            type="button"
+            id="stitchFileButton"
+            class="file-picker-button"
+          >
+            Choose files
+          </button>
+          <span id="stitchFileLabel" class="file-picker-label">
+            No files chosen
+          </span>
+          <input
+            id="stitchFolderInput"
+            name="stitchFolderInput"
+            type="file"
+            multiple
+            accept="image/*"
+          />
+        </div>
       </div>
 
-      <button type="submit" id="stitchButton">
-        Import & stitch images
+      <button type="submit" id="stitchButton" class="primary">
+        Import
       </button>
 
       <div id="stitchProgress" class="hint"></div>
-
-      <p class="hint">
-        Files will be sorted by name (numbers at the end are taken into
-        account), created on the board and aligned into a grid with no gaps.
-        After import the viewport will zoom to the stitched area.
-      </p>
     </form>
   </div>
-
-  <script>
-    // simple tabs
-    document.addEventListener("DOMContentLoaded", () => {
-      const tabButtons = document.querySelectorAll(".tab-btn");
-      const tabContents = {
-        sorting: document.getElementById("tab-sorting"),
-        stitch: document.getElementById("tab-stitch"),
-      };
-
-      tabButtons.forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const tab = btn.dataset.tab;
-
-          tabButtons.forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-
-          Object.entries(tabContents).forEach(([name, el]) => {
-            el.classList.toggle("active", name === tab);
-          });
-        });
-      });
-    });
-  </script>
 </body>
 </html>

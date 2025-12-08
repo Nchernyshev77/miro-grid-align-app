@@ -5,7 +5,7 @@ const { board } = window.miro;
 // --- color settings ---
 const SAT_CODE_MAX = 99;              // максимум кода сатурации (00..99)
 const SAT_BOOST = 4.0;                // усиливаем сатурацию, чтобы растянуть шкалу
-const SAT_GROUP_THRESHOLD = 10;       // <= порога — считаем "серым", > — цветным
+const SAT_GROUP_THRESHOLD = 30;       // <= порога — считаем "серым", > — цветным
 
 /* ---------- helpers: titles & numbers ---------- */
 
@@ -714,3 +714,4 @@ window.addEventListener("DOMContentLoaded", () => {
     updateLabel();
   }
 });
+

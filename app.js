@@ -1,6 +1,5 @@
 // app.js
-// Image Align Tool: Sorting (align selection), Stitch (import grid),
-// Slice (cut big images into 4096x4096 tiles).
+// Image Align Tool: Sorting (align selection), Stitch (import grid), Slice (cut big images into tiles)
 
 const { board } = window.miro;
 
@@ -9,8 +8,32 @@ const SAT_CODE_MAX = 99;
 const SAT_BOOST = 4.0;
 const SAT_GROUP_THRESHOLD = 35;      // порог сатурации: <= серые, > цветные
 const SLICE_TILE_SIZE = 4096;        // размер тайла в Slice
-const MAX_SLICE_DIM = 16384;         // макс. размер стороны для Slice (безопасный лимит для браузера)
-const MAX_URL_BYTES = 30000000;      // лимит размера поля url в Miro (из сообщения об ошибке)
+let   MAX_SLICE_DIM = 16384;         // будет уточнён через WebGL (16k / 32k)
+const MAX_URL_BYTES = 30000000;      // лимит размера поля url в Miro (из ошибки)
+
+// ---------- авто-детект лимита по стороне через WebGL ----------
+
+function detectMaxSliceDim() {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl =
+      canvas.getContext("webgl") ||
+      canvas.getContext("experimental-webgl");
+
+    if (!gl) {
+      console.warn("Slice: WebGL not available, using fallback 16384.");
+      return;
+    }
+
+    const maxTexSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    console.log("Slice: MAX_TEXTURE_SIZE =", maxTexSize);
+
+    // ограничиваем сверху разумным значением
+    MAX_SLICE_DIM = Math.min(maxTexSize || 16384, 32767);
+  } catch (e) {
+    console.warn("Slice: failed to detect MAX_TEXTURE_SIZE, using fallback.", e);
+  }
+}
 
 // ---------- helpers: titles & numbers ----------
 
@@ -249,7 +272,7 @@ async function alignImagesInGivenOrder(images, config) {
 }
 
 /**
- * Выравнивание с пропусками тайлов (используется в Stitch, когда включен skip missing tiles).
+ * Выравнивание с пропусками тайлов (Stitch, skip missing tiles).
  * tileIndices[i] — "номер" тайла (1,2,4...) для images[i].
  */
 async function alignImagesWithGaps(
@@ -265,7 +288,7 @@ async function alignImagesWithGaps(
 
   if (!images.length) return;
   if (!tileIndices || tileIndices.length !== images.length) {
-    console.warn("alignImagesWithGaps: invalid tileIndices, fallback to normal.");
+    console.warn("alignImagesWithGaps: invalid tileIndices, fallback.");
     await alignImagesInGivenOrder(images, {
       ...config,
       horizontalGap: 0,
@@ -967,7 +990,7 @@ async function handleSliceSubmit(event) {
       viewCenterX = viewport.x + viewport.width / 2;
       viewCenterY = viewport.y + viewport.height / 2;
     } catch (e) {
-      console.warn("Could not get viewport, fallback to 0,0", e);
+      console.warn("Slice: could not get viewport, fallback to 0,0", e);
     }
 
     // 1. Подготовка: читаем файлы, узнаём размеры и считаем общее число тайлов
@@ -1003,14 +1026,14 @@ async function handleSliceSubmit(event) {
         continue;
       }
 
-      // Предупреждение и пропуск, если картинка превышает безопасный лимит
+      // предупреждение и пропуск, если картинка превышает лимит для этого устройства
       if (width > MAX_SLICE_DIM || height > MAX_SLICE_DIM) {
         console.warn(
           `Slice: image too large (${width}x${height}), limit is ${MAX_SLICE_DIM}px per side.`
         );
         await board.notifications.showError(
           `Image "${file.name}" is too large (${width}×${height}). ` +
-            `Slice supports up to ${MAX_SLICE_DIM}px per side. ` +
+            `Slice supports up to ${MAX_SLICE_DIM}px per side on this device. ` +
             `Please downscale or pre-slice it externally.`
         );
         continue;
@@ -1040,7 +1063,7 @@ async function handleSliceSubmit(event) {
       return;
     }
 
-    // 2. Режем и создаём тайлы
+    // 2. Режем и создаём тайлы сразу в нужных координатах
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     canvas.width = SLICE_TILE_SIZE;
@@ -1055,11 +1078,18 @@ async function handleSliceSubmit(event) {
       const info = fileInfos[fi];
       const { imgEl, width, height, tilesX, tilesY } = info;
 
-      const tilesForThisFile = [];
-
       // базовый центр мозаики для этого файла
       const mosaicCenterX = viewCenterX;
       const mosaicCenterY = viewCenterY + fi * (SLICE_TILE_SIZE + 512);
+
+      const cellWidth = SLICE_TILE_SIZE;
+      const cellHeight = SLICE_TILE_SIZE;
+
+      const gridWidth = tilesX * cellWidth;
+      const gridHeight = tilesY * cellHeight;
+
+      const baseLeft = mosaicCenterX - gridWidth / 2;
+      const baseTop = mosaicCenterY - gridHeight / 2;
 
       for (let ty = 0; ty < tilesY; ty++) {
         for (let tx = 0; tx < tilesX; tx++) {
@@ -1071,9 +1101,7 @@ async function handleSliceSubmit(event) {
           ctx.clearRect(0, 0, SLICE_TILE_SIZE, SLICE_TILE_SIZE);
           ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
 
-          // кодируем в JPEG и следим, чтобы dataURL был < 30МБ
           const tileDataUrl = canvasToDataUrlUnderLimit(canvas);
-
           if (!tileDataUrl) {
             await board.notifications.showError(
               `One of the tiles from "${info.file.name}" is too large even after compression. Skipped.`
@@ -1088,15 +1116,19 @@ async function handleSliceSubmit(event) {
             continue;
           }
 
+          const centerX =
+            baseLeft + tx * cellWidth + cellWidth / 2;
+          const centerY =
+            baseTop + ty * cellHeight + cellHeight / 2;
+
           const t0 = performance.now();
           const tileWidget = await board.createImage({
             url: tileDataUrl,
-            x: 0,
-            y: 0,
+            x: centerX,
+            y: centerY,
           });
           const t1 = performance.now();
 
-          tilesForThisFile.push(tileWidget);
           allCreatedTiles.push(tileWidget);
 
           createdTiles++;
@@ -1115,28 +1147,6 @@ async function handleSliceSubmit(event) {
           setEtaText(etaMs);
         }
       }
-
-      // выравниваем тайлы этого файла в сетку, чтобы собрать картинку
-      const cellWidth = Math.max(...tilesForThisFile.map((t) => t.width));
-      const cellHeight = Math.max(...tilesForThisFile.map((t) => t.height));
-
-      const gridWidth = tilesX * cellWidth;
-      const gridHeight = tilesY * cellHeight;
-
-      const baseLeft = mosaicCenterX - gridWidth / 2;
-      const baseTop = mosaicCenterY - gridHeight / 2;
-
-      let idx = 0;
-      for (let ty = 0; ty < tilesY; ty++) {
-        for (let tx = 0; tx < tilesX; tx++) {
-          const tile = tilesForThisFile[idx++];
-          const cx = baseLeft + tx * cellWidth + tile.width / 2;
-          const cy = baseTop + ty * cellHeight + tile.height / 2;
-          tile.x = cx;
-          tile.y = cy;
-        }
-      }
-      await Promise.all(tilesForThisFile.map((t) => t.sync()));
     }
 
     updateBarAndText("Done!", totalTiles, totalTiles);
@@ -1169,6 +1179,9 @@ async function handleSliceSubmit(event) {
 // ---------- init ----------
 
 window.addEventListener("DOMContentLoaded", () => {
+  // авто-детект максимального размера стороны для Slice
+  detectMaxSliceDim();
+
   const sortingForm = document.getElementById("sorting-form");
   if (sortingForm) sortingForm.addEventListener("submit", handleSortingSubmit);
 

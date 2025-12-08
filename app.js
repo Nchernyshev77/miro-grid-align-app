@@ -5,7 +5,8 @@ const { board } = window.miro;
 // --- color settings ---
 const SAT_CODE_MAX = 99;
 const SAT_BOOST = 4.0;
-const SAT_GROUP_THRESHOLD = 10; // <= порога — "серые", > — цветные
+// <= порога — "серые", > — цветные
+const SAT_GROUP_THRESHOLD = 35;
 
 /* ---------- helpers: titles & numbers ---------- */
 
@@ -229,6 +230,104 @@ async function alignImagesInGivenOrder(images, config) {
     const img = images[i];
     img.x = originLeft + x0;
     img.y = originTop + y0;
+  }
+
+  await Promise.all(images.map((img) => img.sync()));
+}
+
+/**
+ * Выравнивание с пропусками тайлов.
+ * tileIndices[i] — "номер" тайла (1,2,4...) для images[i].
+ * Пропущенные номера дают пустые клетки в сетке (место того же размера).
+ */
+async function alignImagesWithGaps(images, tileIndices, config, cellWidth, cellHeight, baseX, baseY) {
+  const { imagesPerRow, startCorner } = config;
+
+  if (!images.length) return;
+  if (!tileIndices || tileIndices.length !== images.length) {
+    console.warn("alignImagesWithGaps: invalid tileIndices, fallback to normal.");
+    await alignImagesInGivenOrder(images, {
+      ...config,
+      horizontalGap: 0,
+      verticalGap: 0,
+      sizeMode: "none",
+    });
+    return;
+  }
+
+  const cols = Math.max(1, imagesPerRow);
+
+  const minIndex = Math.min(...tileIndices);
+  const maxIndex = Math.max(...tileIndices);
+  const maxPos = maxIndex - minIndex; // 0-based
+  const rows = Math.floor(maxPos / cols) + 1;
+
+  const gridWidth = cols * cellWidth;
+  const gridHeight = rows * cellHeight;
+
+  let originLeft;
+  let originTop;
+
+  switch (startCorner) {
+    case "top-left":
+      originLeft = baseX;
+      originTop = baseY;
+      break;
+    case "top-right":
+      originLeft = baseX - gridWidth;
+      originTop = baseY;
+      break;
+    case "bottom-left":
+      originLeft = baseX;
+      originTop = baseY - gridHeight;
+      break;
+    case "bottom-right":
+      originLeft = baseX - gridWidth;
+      originTop = baseY - gridHeight;
+      break;
+    default:
+      originLeft = baseX;
+      originTop = baseY;
+  }
+
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const tIndex = tileIndices[i];
+
+    const pos = tIndex - minIndex; // 0-based
+    let row = Math.floor(pos / cols);
+    let col = pos % cols;
+
+    // направление чтения в зависимости от угла
+    let finalRow = row;
+    let finalCol = col;
+
+    switch (startCorner) {
+      case "top-left":
+        // слева-направо, сверху-вниз — уже так
+        break;
+      case "top-right":
+        // справа-налево, сверху-вниз
+        finalCol = (cols - 1) - col;
+        break;
+      case "bottom-left":
+        // слева-направо, снизу-вверх
+        finalRow = (rows - 1) - row;
+        break;
+      case "bottom-right":
+        // справа-налево, снизу-вверх
+        finalRow = (rows - 1) - row;
+        finalCol = (cols - 1) - col;
+        break;
+      default:
+        break;
+    }
+
+    const centerX = originLeft + finalCol * cellWidth + cellWidth / 2;
+    const centerY = originTop + finalRow * cellHeight + cellHeight / 2;
+
+    img.x = centerX;
+    img.y = centerY;
   }
 
   await Promise.all(images.map((img) => img.sync()));
@@ -473,7 +572,7 @@ function sortFilesByNameWithNumber(files) {
   return arr.map((m) => m.file);
 }
 
-/* ---------- STITCH handler (прогресс-бар + ETA по средней скорости создания) ---------- */
+/* ---------- STITCH handler (прогресс + ETA + skip missing tiles) ---------- */
 
 async function handleStitchSubmit(event) {
   event.preventDefault();
@@ -513,6 +612,7 @@ async function handleStitchSubmit(event) {
 
     const imagesPerRow = Number(form.stitchImagesPerRow.value) || 1;
     const startCorner = form.stitchStartCorner.value;
+    const skipMissingTiles = form.stitchSkipMissing.checked;
 
     const input = document.getElementById("stitchFolderInput");
     const files = input ? input.files : null;
@@ -533,7 +633,6 @@ async function handleStitchSubmit(event) {
 
     if (stitchButton) stitchButton.disabled = true;
 
-    // reset progress UI
     if (progressBarEl) progressBarEl.style.width = "0%";
     if (progressMainEl) progressMainEl.textContent = "";
     if (progressEtaEl) progressEtaEl.textContent = "";
@@ -555,7 +654,7 @@ async function handleStitchSubmit(event) {
       console.warn("Could not get viewport, falling back to (0,0):", e);
     }
 
-    // --- 1. чтение и анализ файлов (ETA здесь не считаем, только прогресс) ---
+    // --- 1. чтение и анализ ---
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
 
@@ -564,7 +663,7 @@ async function handleStitchSubmit(event) {
         doneSteps,
         totalSteps
       );
-      setEtaText(null); // без времени на этом этапе
+      setEtaText(null);
 
       const dataUrl = await readFileAsDataUrl(file);
 
@@ -603,14 +702,60 @@ async function handleStitchSubmit(event) {
       );
     }
 
-    // --- 2. сортировка файлов ---
+    // --- 2. сортировка файлов по имени/номеру ---
     updateBarAndText("Ordering files…", doneSteps, totalSteps);
     setEtaText(null);
 
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
     const infoByFile = new Map();
     fileInfos.forEach((info) => infoByFile.set(info.file, info));
+
     const orderedInfos = orderedFiles.map((f) => infoByFile.get(f));
+
+    // подготовка номеров тайлов для skipMissing
+    let tileIndices = null;
+    if (skipMissingTiles) {
+      const meta = orderedFiles.map((file, idx) => {
+        const info = orderedInfos[idx];
+        const name = file.name || "";
+        const num = extractTrailingNumber(name);
+        return {
+          file,
+          info,
+          name,
+          hasNumber: num !== null,
+          num,
+          tileIndex: null,
+        };
+      });
+
+      const numbered = meta.filter((m) => m.hasNumber);
+      if (numbered.length > 0) {
+        const minNum = Math.min(...numbered.map((m) => m.num));
+        const maxNum = Math.max(...numbered.map((m) => m.num));
+
+        // тайлы с номером: берем их num как tileIndex
+        meta.forEach((m) => {
+          if (m.hasNumber) {
+            m.tileIndex = m.num;
+          }
+        });
+
+        // без номера — ставим после последнего нумерованного, без пропусков
+        let current = maxNum;
+        meta.forEach((m) => {
+          if (!m.hasNumber) {
+            current += 1;
+            m.tileIndex = current;
+          }
+        });
+
+        tileIndices = meta.map((m) => m.tileIndex);
+      } else {
+        // если номеров вообще нет — skipMissing смысла не имеет
+        tileIndices = null;
+      }
+    }
 
     // --- 3. создание виджетов + ETA по средней скорости создания ---
     const createdImages = [];
@@ -621,6 +766,8 @@ async function handleStitchSubmit(event) {
     const totalImages = orderedInfos.length;
     let creationCount = 0;
     let creationTimeSumMs = 0;
+    let baseCellWidth = null;
+    let baseCellHeight = null;
 
     for (let i = 0; i < orderedInfos.length; i++) {
       const info = orderedInfos[i];
@@ -644,7 +791,12 @@ async function handleStitchSubmit(event) {
 
       createdImages.push(img);
 
-      const duration = t1 - t0; // ms
+      if (baseCellWidth == null || baseCellHeight == null) {
+        baseCellWidth = img.width;
+        baseCellHeight = img.height;
+      }
+
+      const duration = t1 - t0;
       creationCount += 1;
       creationTimeSumMs += duration;
       const avgPerImageMs = creationTimeSumMs / creationCount;
@@ -661,17 +813,32 @@ async function handleStitchSubmit(event) {
       setEtaText(etaMs);
     }
 
-    // --- 4. выравнивание ---
+    // --- 4. выравнивание (с пропусками или без) ---
     updateBarAndText("Aligning images…", doneSteps, totalSteps);
     setEtaText(null);
 
-    await alignImagesInGivenOrder(createdImages, {
-      imagesPerRow,
-      horizontalGap: 0,
-      verticalGap: 0,
-      sizeMode: "none",
-      startCorner,
-    });
+    if (skipMissingTiles && tileIndices && baseCellWidth && baseCellHeight) {
+      await alignImagesWithGaps(
+        createdImages,
+        tileIndices,
+        {
+          imagesPerRow,
+          startCorner,
+        },
+        baseCellWidth,
+        baseCellHeight,
+        baseX,
+        baseY
+      );
+    } else {
+      await alignImagesInGivenOrder(createdImages, {
+        imagesPerRow,
+        horizontalGap: 0,
+        verticalGap: 0,
+        sizeMode: "none",
+        startCorner,
+      });
+    }
 
     doneSteps++;
     updateBarAndText("Done!", doneSteps, totalSteps);

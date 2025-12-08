@@ -35,13 +35,13 @@
       border: 1px solid rgba(15, 23, 42, 0.15);
       background: #e5e7eb;
       cursor: pointer;
-      color: #000; /* неактивные – чёрный текст */
+      color: #000;
       transition: background 0.15s ease, color 0.15s ease, transform 0.05s ease;
     }
 
     .tab-btn.active {
       background: #2563eb;
-      color: #ffffff; /* активные – белый текст */
+      color: #ffffff;
       border-color: #2563eb;
     }
 
@@ -170,6 +170,23 @@
 
     #stitchFolderInput {
       display: none;
+    }
+
+    /* прогресс-бар */
+
+    .progress-container {
+      margin-top: 8px;
+      height: 6px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #2563eb;
+      transition: width 0.1s linear;
     }
   </style>
 </head>
@@ -308,6 +325,9 @@
         Import
       </button>
 
+      <div class="progress-container">
+        <div id="stitchProgressBar" class="progress-fill"></div>
+      </div>
       <div id="stitchProgress" class="hint"></div>
     </form>
   </div>

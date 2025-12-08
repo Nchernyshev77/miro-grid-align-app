@@ -3,9 +3,9 @@
 const { board } = window.miro;
 
 // --- color settings ---
-const SAT_CODE_MAX = 99;              // максимум кода сатурации (00..99)
-const SAT_BOOST = 4.0;                // усиливаем сатурацию, чтобы растянуть шкалу
-const SAT_GROUP_THRESHOLD = 30;       // <= порога — считаем "серым", > — цветным
+const SAT_CODE_MAX = 99;
+const SAT_BOOST = 4.0;
+const SAT_GROUP_THRESHOLD = 10; // <= порога — "серые", > — цветные
 
 /* ---------- helpers: titles & numbers ---------- */
 
@@ -13,12 +13,6 @@ function getTitle(item) {
   return (item.title || "").toString();
 }
 
-/**
- * Вытянуть ПОСЛЕДНЕЕ целое число из строки.
- * "Name_01"   -> 1
- * "Name0003"  -> 3
- * "Name 10a2" -> 2 (последняя группа цифр)
- */
 function extractTrailingNumber(str) {
   const match = str.match(/(\d+)(?!.*\d)/);
   if (!match) return null;
@@ -26,9 +20,6 @@ function extractTrailingNumber(str) {
   return Number.isNaN(num) ? null : num;
 }
 
-/**
- * Сортировка по геометрии: сверху вниз, внутри строки слева направо.
- */
 function sortByGeometry(images) {
   return [...images].sort((a, b) => {
     if (a.y < b.y) return -1;
@@ -51,10 +42,6 @@ function loadImage(url) {
   });
 }
 
-/**
- * Яркость + сатурация по размытой центральной части изображения.
- * Обрезаем 30% сверху и по 20% слева/справа.
- */
 function getBrightnessAndSaturationFromImageElement(
   img,
   smallSize = 50,
@@ -105,12 +92,12 @@ function getBrightnessAndSaturationFromImageElement(
     const g = data[i + 1];
     const b = data[i + 2];
 
-    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b; // яркость
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     sumY += y;
 
     const maxv = Math.max(r, g, b);
     const minv = Math.min(r, g, b);
-    sumDiff += maxv - minv; // разброс каналов = цветность
+    sumDiff += maxv - minv;
   }
 
   const avgY = sumY / totalPixels;
@@ -135,7 +122,6 @@ async function alignImagesInGivenOrder(images, config) {
 
   if (!images.length) return;
 
-  // нормализация размера
   if (sizeMode === "width") {
     const targetWidth = Math.min(...images.map((img) => img.width));
     for (const img of images) img.width = targetWidth;
@@ -200,9 +186,7 @@ async function alignImagesInGivenOrder(images, config) {
   const minLeft = Math.min(...bounds.map((b) => b.left));
   const minTop = Math.min(...bounds.map((b) => b.top));
   const maxRight = Math.max(...bounds.map((b) => b.right));
-  const maxBottom = Math.min
-    ? Math.max(...bounds.map((b) => b.bottom))
-    : Math.max(...bounds.map((b) => b.bottom));
+  const maxBottom = Math.max(...bounds.map((b) => b.bottom));
 
   let originLeft;
   let originTop;
@@ -275,9 +259,7 @@ async function sortImagesByNumber(images) {
   });
 
   console.groupCollapsed("Sorting (number) – titles & numbers");
-  meta.forEach((m) => {
-    console.log(m.title || m.img.id, "=>", m.num);
-  });
+  meta.forEach((m) => console.log(m.title || m.img.id, "=>", m.num));
   console.groupEnd();
 
   meta.sort((a, b) => {
@@ -299,19 +281,8 @@ async function sortImagesByNumber(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: by color (через коды в title) ---------- */
+/* ---------- SORTING: by color ---------- */
 
-/**
- * Title: "CSS/BBB имя"
- *   SS  = 0..99   – код сатурации (0 – серое/бледное, 99 – очень цветное)
- *   BBB = 0..999  – код яркости (000 – белое, 999 – чёрное)
- *
- * Порядок:
- *   0. сначала серые: SS <= SAT_GROUP_THRESHOLD,
- *      затем цветные: SS > SAT_GROUP_THRESHOLD;
- *   1. внутри каждой группы – по яркости от белого к чёрному (BBB по возрастанию);
- *   2. при одинаковой яркости – по сатурации (от бледных к насыщенным).
- */
 async function sortImagesByColor(images) {
   const meta = images.map((img, index) => {
     const title = getTitle(img);
@@ -366,9 +337,9 @@ async function sortImagesByColor(images) {
 
   meta.sort((a, b) => {
     if (a.hasCode && b.hasCode) {
-      if (a.group !== b.group) return a.group - b.group;           // серые → цветные
-      if (a.briCode !== b.briCode) return a.briCode - b.briCode;   // светлее → темнее
-      if (a.satCode !== b.satCode) return a.satCode - b.satCode;   // бледнее → насыщеннее
+      if (a.group !== b.group) return a.group - b.group;         // серые → цветные
+      if (a.briCode !== b.briCode) return a.briCode - b.briCode; // светлее → темнее
+      if (a.satCode !== b.satCode) return a.satCode - b.satCode; // бледнее → насыщеннее
       return a.index - b.index;
     }
     if (a.hasCode) return -1;
@@ -379,7 +350,7 @@ async function sortImagesByColor(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: main handler ---------- */
+/* ---------- SORTING: handler ---------- */
 
 async function handleSortingSubmit(event) {
   event.preventDefault();
@@ -444,7 +415,7 @@ async function handleSortingSubmit(event) {
   }
 }
 
-/* ---------- STITCH TAB ---------- */
+/* ---------- STITCH helpers ---------- */
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -477,7 +448,6 @@ function sortFilesByNameWithNumber(files) {
   const anyHasNumber = arr.some((m) => m.hasNumber);
 
   if (!anyHasNumber) {
-    // ни у одного файла нет числа в имени — просто рандом
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -503,11 +473,60 @@ function sortFilesByNameWithNumber(files) {
   return arr.map((m) => m.file);
 }
 
+/* ---------- STITCH handler (с прогресс-баром и ETA) ---------- */
+
 async function handleStitchSubmit(event) {
   event.preventDefault();
 
   const stitchButton = document.getElementById("stitchButton");
-  const progressEl = document.getElementById("stitchProgress");
+  const progressTextEl = document.getElementById("stitchProgress");
+  const progressBarEl = document.getElementById("stitchProgressBar");
+
+  const setProgress = (() => {
+    let totalUnits = 1;
+    let doneUnits = 0;
+    let startTime = performance.now();
+
+    return (opts) => {
+      const { initTotal, addDone, label } = opts;
+
+      if (initTotal) {
+        totalUnits = initTotal;
+        doneUnits = 0;
+        startTime = performance.now();
+      }
+
+      if (addDone) {
+        doneUnits += addDone;
+        if (doneUnits > totalUnits) doneUnits = totalUnits;
+      }
+
+      const fraction = totalUnits > 0 ? doneUnits / totalUnits : 0;
+      if (progressBarEl) {
+        progressBarEl.style.width = `${(fraction * 100).toFixed(1)}%`;
+      }
+
+      let etaText = "";
+      if (doneUnits > 0 && doneUnits < totalUnits) {
+        const elapsed = (performance.now() - startTime) / 1000;
+        const remaining =
+          (elapsed * (totalUnits - doneUnits)) / doneUnits || 0;
+        const mins = Math.floor(remaining / 60);
+        const secs = Math.round(remaining % 60);
+        const secsStr = secs.toString().padStart(2, "0");
+        etaText =
+          " · ~" +
+          (mins ? `${mins}m ${secsStr}s` : `${secsStr}s`) +
+          " left";
+      }
+
+      if (progressTextEl) {
+        progressTextEl.textContent = label
+          ? label + (etaText || "")
+          : etaText || "";
+      }
+    };
+  })();
 
   try {
     const form = document.getElementById("stitch-form");
@@ -534,12 +553,14 @@ async function handleStitchSubmit(event) {
     }
 
     if (stitchButton) stitchButton.disabled = true;
-    if (progressEl) progressEl.textContent = "Reading files…";
 
     const filesArray = Array.from(files);
+    const totalUnits = filesArray.length * 2 + 1; // read+analyze, create, align
+    setProgress({ initTotal: totalUnits, label: "Starting…" });
+
     const fileInfos = [];
 
-    // Центр текущего вида
+    // центр текущего вида
     let baseX = 0;
     let baseY = 0;
     try {
@@ -550,13 +571,14 @@ async function handleStitchSubmit(event) {
       console.warn("Could not get viewport, falling back to (0,0):", e);
     }
 
-    // читаем и считаем яркость/сатурацию
+    // чтение и анализ
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
 
-      if (progressEl) {
-        progressEl.textContent = `Processing ${i + 1} / ${filesArray.length}…`;
-      }
+      setProgress({
+        addDone: i === 0 ? 0 : 0, // прогресс обновится текстом, сами units добавим ниже
+        label: `Processing ${i + 1} / ${filesArray.length}…`,
+      });
 
       const dataUrl = await readFileAsDataUrl(file);
 
@@ -578,27 +600,29 @@ async function handleStitchSubmit(event) {
         );
       }
 
-      // яркость -> код 000..999 (0 – белое, 999 – чёрное)
       const briCodeRaw = Math.round((1 - brightness) * 999);
       const briCode = Math.max(0, Math.min(999, briCodeRaw));
 
-      // сатурация -> код 00..99 (усиленная)
       const boostedSat = Math.min(1, saturation * SAT_BOOST);
       const satCodeRaw = Math.round(boostedSat * SAT_CODE_MAX);
       const satCode = Math.max(0, Math.min(SAT_CODE_MAX, satCodeRaw));
 
       fileInfos.push({ file, dataUrl, brightness, saturation, briCode, satCode });
+
+      setProgress({ addDone: 1, label: `Processing ${i + 1} / ${filesArray.length}…` });
     }
 
-    if (progressEl) progressEl.textContent = "Ordering files…";
+    // сортировка файлов
+    setProgress({
+      label: "Ordering files…",
+    });
 
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
     const infoByFile = new Map();
     fileInfos.forEach((info) => infoByFile.set(info.file, info));
     const orderedInfos = orderedFiles.map((f) => infoByFile.get(f));
 
-    if (progressEl) progressEl.textContent = "Creating images…";
-
+    // создание виджетов
     const createdImages = [];
     const offsetStep = 50;
 
@@ -609,9 +633,9 @@ async function handleStitchSubmit(event) {
       const info = orderedInfos[i];
       const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${info.file.name}`;
 
-      if (progressEl) {
-        progressEl.textContent = `Creating ${i + 1} / ${orderedInfos.length}…`;
-      }
+      setProgress({
+        label: `Creating ${i + 1} / ${orderedInfos.length}…`,
+      });
 
       const img = await board.createImage({
         url: info.dataUrl,
@@ -621,10 +645,11 @@ async function handleStitchSubmit(event) {
       });
 
       createdImages.push(img);
+      setProgress({ addDone: 1, label: `Creating ${i + 1} / ${orderedInfos.length}…` });
     }
 
-    if (progressEl) progressEl.textContent = "Aligning images…";
-
+    // выравнивание
+    setProgress({ label: "Aligning images…" });
     await alignImagesInGivenOrder(createdImages, {
       imagesPerRow,
       horizontalGap: 0,
@@ -632,6 +657,7 @@ async function handleStitchSubmit(event) {
       sizeMode: "none",
       startCorner,
     });
+    setProgress({ addDone: 1, label: "Done." });
 
     try {
       await board.viewport.zoomTo(createdImages);
@@ -639,7 +665,6 @@ async function handleStitchSubmit(event) {
       console.warn("zoomTo failed or not supported with items:", e);
     }
 
-    if (progressEl) progressEl.textContent = "Done.";
     await board.notifications.showInfo(
       `Imported and stitched ${createdImages.length} image${
         createdImages.length === 1 ? "" : "s"
@@ -647,7 +672,8 @@ async function handleStitchSubmit(event) {
     );
   } catch (err) {
     console.error(err);
-    if (progressEl) progressEl.textContent = "Error.";
+    if (progressTextEl) progressTextEl.textContent = "Error.";
+    if (progressBarEl) progressBarEl.style.width = "0%";
     await board.notifications.showError(
       "Something went wrong while importing images. Please check the console."
     );
@@ -656,7 +682,7 @@ async function handleStitchSubmit(event) {
   }
 }
 
-/* ---------- init (tabs + forms + file button) ---------- */
+/* ---------- init ---------- */
 
 window.addEventListener("DOMContentLoaded", () => {
   const sortingForm = document.getElementById("sorting-form");
@@ -691,7 +717,7 @@ window.addEventListener("DOMContentLoaded", () => {
     activateTab("sorting");
   }
 
-  // кастомная кнопка выбора файлов
+  // кастомный файл-пикер
   const fileButton = document.getElementById("stitchFileButton");
   const fileInput = document.getElementById("stitchFolderInput");
   const fileLabel = document.getElementById("stitchFileLabel");
@@ -714,4 +740,3 @@ window.addEventListener("DOMContentLoaded", () => {
     updateLabel();
   }
 });
-

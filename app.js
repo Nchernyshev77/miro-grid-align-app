@@ -1,15 +1,18 @@
 // app.js
-// Image Align Tool: Sorting (align selection), Stitch (import grid), Slice (cut big images into 4096x4096 tiles).
+// Image Align Tool: Sorting (align selection), Stitch (import grid),
+// Slice (cut big images into 4096x4096 tiles).
+
 const { board } = window.miro;
 
-// --- color settings ---
+// ---- color / slice settings ----
 const SAT_CODE_MAX = 99;
 const SAT_BOOST = 4.0;
-// <= порога — "серые", > — цветные
-const SAT_GROUP_THRESHOLD = 35;
-const SLICE_TILE_SIZE = 4096;
+const SAT_GROUP_THRESHOLD = 35;      // порог сатурации: <= серые, > цветные
+const SLICE_TILE_SIZE = 4096;        // размер тайла в Slice
+const MAX_SLICE_DIM = 16384;         // макс. размер стороны для Slice (безопасный лимит для браузера)
+const MAX_URL_BYTES = 30000000;      // лимит размера поля url в Miro (из сообщения об ошибке)
 
-/* ---------- helpers: titles & numbers ---------- */
+// ---------- helpers: titles & numbers ----------
 
 function getTitle(item) {
   return (item.title || "").toString();
@@ -32,7 +35,7 @@ function sortByGeometry(images) {
   });
 }
 
-/* ---------- helpers: image loading & brightness ---------- */
+// ---------- helpers: image loading & brightness ----------
 
 function loadImage(url) {
   return new Promise((resolve, reject) => {
@@ -44,6 +47,12 @@ function loadImage(url) {
   });
 }
 
+/**
+ * Возвращает среднюю яркость и "сырую" сатурацию по ROI:
+ *   - уменьшаем до smallSize
+ *   - блюрим (blurPx)
+ *   - обрезаем верхнюю часть и боковые поля
+ */
 function getBrightnessAndSaturationFromImageElement(
   img,
   smallSize = 50,
@@ -111,7 +120,7 @@ function getBrightnessAndSaturationFromImageElement(
   return { brightness, saturation: saturationApprox };
 }
 
-/* ---------- helpers: alignment ---------- */
+// ---------- helpers: alignment ----------
 
 async function alignImagesInGivenOrder(images, config) {
   const {
@@ -124,6 +133,7 @@ async function alignImagesInGivenOrder(images, config) {
 
   if (!images.length) return;
 
+  // 1. выравниваем размер (если нужно)
   if (sizeMode === "width") {
     const targetWidth = Math.min(...images.map((img) => img.width));
     for (const img of images) img.width = targetWidth;
@@ -141,6 +151,7 @@ async function alignImagesInGivenOrder(images, config) {
   const rowHeights = new Array(rows).fill(0);
   const rowWidths = new Array(rows).fill(0);
 
+  // собираем размеры строк
   for (let i = 0; i < total; i++) {
     const r = Math.floor(i / cols);
     const img = images[i];
@@ -178,6 +189,7 @@ async function alignImagesInGivenOrder(images, config) {
     rowCursorX[r] += img.width + horizontalGap;
   }
 
+  // bounding box исходного набора картинок
   const bounds = images.map((img) => ({
     left: img.x - img.width / 2,
     top: img.y - img.height / 2,
@@ -237,9 +249,8 @@ async function alignImagesInGivenOrder(images, config) {
 }
 
 /**
- * Выравнивание с пропусками тайлов.
+ * Выравнивание с пропусками тайлов (используется в Stitch, когда включен skip missing tiles).
  * tileIndices[i] — "номер" тайла (1,2,4...) для images[i].
- * Пропущенные номера дают пустые клетки в сетке (место того же размера).
  */
 async function alignImagesWithGaps(
   images,
@@ -337,11 +348,12 @@ async function alignImagesWithGaps(
   await Promise.all(images.map((img) => img.sync()));
 }
 
-/* ---------- SORTING: by number ---------- */
+// ---------- SORTING: by number ----------
 
 async function sortImagesByNumber(images) {
   const hasAnyEmptyTitle = images.some((img) => !getTitle(img));
 
+  // если у части картинок нет заголовка — нумеруем по геометрии
   if (hasAnyEmptyTitle) {
     const geoOrder = sortByGeometry(images);
     let counter = 1;
@@ -384,7 +396,7 @@ async function sortImagesByNumber(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: by color ---------- */
+// ---------- SORTING: by color ----------
 
 async function sortImagesByColor(images) {
   const meta = images.map((img, index) => {
@@ -438,11 +450,12 @@ async function sortImagesByColor(images) {
   });
   console.groupEnd();
 
+  // порядок: серые → цветные, внутри группы: светлые → тёмные, бледные → насыщенные
   meta.sort((a, b) => {
     if (a.hasCode && b.hasCode) {
-      if (a.group !== b.group) return a.group - b.group; // серые → цветные
-      if (a.briCode !== b.briCode) return a.briCode - b.briCode; // светлее → темнее
-      if (a.satCode !== b.satCode) return a.satCode - b.satCode; // бледнее → насыщеннее
+      if (a.group !== b.group) return a.group - b.group;
+      if (a.briCode !== b.briCode) return a.briCode - b.briCode;
+      if (a.satCode !== b.satCode) return a.satCode - b.satCode;
       return a.index - b.index;
     }
     if (a.hasCode) return -1;
@@ -453,7 +466,7 @@ async function sortImagesByColor(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING handler ---------- */
+// ---------- SORTING handler ----------
 
 async function handleSortingSubmit(event) {
   event.preventDefault();
@@ -482,9 +495,7 @@ async function handleSortingSubmit(event) {
     }
 
     if (imagesPerRow < 1) {
-      await board.notifications.showError(
-        "“Rows” must be greater than 0."
-      );
+      await board.notifications.showError("“Rows” must be greater than 0.");
       return;
     }
 
@@ -518,7 +529,7 @@ async function handleSortingSubmit(event) {
   }
 }
 
-/* ---------- STITCH helpers ---------- */
+// ---------- STITCH helpers ----------
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -551,6 +562,7 @@ function sortFilesByNameWithNumber(files) {
   const anyHasNumber = arr.some((m) => m.hasNumber);
 
   if (!anyHasNumber) {
+    // если ни у кого нет номера — просто рандомно перемешиваем
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -576,7 +588,7 @@ function sortFilesByNameWithNumber(files) {
   return arr.map((m) => m.file);
 }
 
-/* ---------- STITCH handler (прогресс + ETA + skip missing tiles) ---------- */
+// ---------- STITCH handler (прогресс + ETA + skip missing tiles) ----------
 
 async function handleStitchSubmit(event) {
   event.preventDefault();
@@ -629,9 +641,7 @@ async function handleStitchSubmit(event) {
     }
 
     if (imagesPerRow < 1) {
-      await board.notifications.showError(
-        "“Rows” must be greater than 0."
-      );
+      await board.notifications.showError("“Rows” must be greater than 0.");
       return;
     }
 
@@ -713,7 +723,6 @@ async function handleStitchSubmit(event) {
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
     const infoByFile = new Map();
     fileInfos.forEach((info) => infoByFile.set(info.file, info));
-
     const orderedInfos = orderedFiles.map((f) => infoByFile.get(f));
 
     // подготовка номеров тайлов для skipMissing
@@ -758,7 +767,7 @@ async function handleStitchSubmit(event) {
       }
     }
 
-    // --- 3. создание виджетов + ETA по средней скорости создания ---
+    // --- 3. создание виджетов + ETA ---
     const createdImages = [];
     const offsetStep = 50;
     const pad2 = (n) => String(n).padStart(2, "0");
@@ -869,7 +878,34 @@ async function handleStitchSubmit(event) {
   }
 }
 
-/* ---------- SLICE handler (режим Slice: режем на 4096x4096 и собираем) ---------- */
+// ---------- SLICE helpers ----------
+
+/**
+ * Кодирует canvas в JPEG и, при необходимости, понижает качество,
+ * чтобы строка dataURL была меньше maxBytes. Если не получилось — возвращает null.
+ */
+function canvasToDataUrlUnderLimit(canvas, maxBytes = MAX_URL_BYTES) {
+  let quality = 0.9;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+
+  while (dataUrl.length > maxBytes && quality > 0.3) {
+    quality -= 0.1;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  }
+
+  if (dataUrl.length > maxBytes) {
+    console.error(
+      "Slice: tile dataURL is still too large after compression:",
+      dataUrl.length,
+      "bytes"
+    );
+    return null;
+  }
+
+  return dataUrl;
+}
+
+// ---------- SLICE handler ----------
 
 async function handleSliceSubmit(event) {
   event.preventDefault();
@@ -944,10 +980,42 @@ async function handleSliceSubmit(event) {
       setEtaText(null);
 
       const dataUrl = await readFileAsDataUrl(file);
-      const imgEl = await loadImage(dataUrl);
+
+      let imgEl;
+      try {
+        imgEl = await loadImage(dataUrl);
+      } catch (e) {
+        console.error("Slice: browser failed to decode image", file.name, e);
+        await board.notifications.showError(
+          `Cannot slice "${file.name}": browser failed to decode the image.`
+        );
+        continue;
+      }
 
       const width = imgEl.naturalWidth || imgEl.width;
       const height = imgEl.naturalHeight || imgEl.height;
+
+      if (!width || !height) {
+        console.error("Slice: image has invalid dimensions", width, height, file.name);
+        await board.notifications.showError(
+          `Cannot slice "${file.name}": image has invalid dimensions.`
+        );
+        continue;
+      }
+
+      // Предупреждение и пропуск, если картинка превышает безопасный лимит
+      if (width > MAX_SLICE_DIM || height > MAX_SLICE_DIM) {
+        console.warn(
+          `Slice: image too large (${width}x${height}), limit is ${MAX_SLICE_DIM}px per side.`
+        );
+        await board.notifications.showError(
+          `Image "${file.name}" is too large (${width}×${height}). ` +
+            `Slice supports up to ${MAX_SLICE_DIM}px per side. ` +
+            `Please downscale or pre-slice it externally.`
+        );
+        continue;
+      }
+
       const tilesX = Math.ceil(width / SLICE_TILE_SIZE);
       const tilesY = Math.ceil(height / SLICE_TILE_SIZE);
       const numTiles = tilesX * tilesY;
@@ -966,7 +1034,7 @@ async function handleSliceSubmit(event) {
       });
     }
 
-    if (!totalTiles) {
+    if (!totalTiles || !fileInfos.length) {
       updateBarAndText("Nothing to slice.", 1, 1);
       setEtaText(null);
       return;
@@ -1003,7 +1071,22 @@ async function handleSliceSubmit(event) {
           ctx.clearRect(0, 0, SLICE_TILE_SIZE, SLICE_TILE_SIZE);
           ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
 
-          const tileDataUrl = canvas.toDataURL("image/png");
+          // кодируем в JPEG и следим, чтобы dataURL был < 30МБ
+          const tileDataUrl = canvasToDataUrlUnderLimit(canvas);
+
+          if (!tileDataUrl) {
+            await board.notifications.showError(
+              `One of the tiles from "${info.file.name}" is too large even after compression. Skipped.`
+            );
+            createdTiles++;
+            updateBarAndText(
+              `Slicing ${createdTiles} / ${totalTiles} tiles`,
+              createdTiles,
+              totalTiles
+            );
+            setEtaText(null);
+            continue;
+          }
 
           const t0 = performance.now();
           const tileWidget = await board.createImage({
@@ -1083,7 +1166,7 @@ async function handleSliceSubmit(event) {
   }
 }
 
-/* ---------- init ---------- */
+// ---------- init ----------
 
 window.addEventListener("DOMContentLoaded", () => {
   const sortingForm = document.getElementById("sorting-form");

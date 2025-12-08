@@ -77,12 +77,16 @@ function loadImage(url) {
 }
 
 /**
- * Средняя яркость (luminance) Y в [0..1] из РАЗМЫТОГО изображения.
+ * Посчитать яркость и признак "ч/б" из РАЗМЫТОГО изображения,
+ * игнорируя верхние 20% по высоте.
+ *
+ * Возвращает { brightness: 0..1, isGray: boolean } или null при ошибке.
  */
-function getBlurredAverageLuminanceFromImageElement(
+function getBrightnessAndGrayFromImageElement(
   img,
   smallSize = 50,
-  blurPx = 3
+  blurPx = 3,
+  cropTopRatio = 0.2
 ) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -103,28 +107,48 @@ function getBlurredAverageLuminanceFromImageElement(
   ctx.drawImage(img, 0, 0, width, height);
   ctx.filter = prevFilter;
 
+  const cropY = Math.floor(height * cropTopRatio);
+  const cropH = height - cropY;
+  if (cropH <= 0) return null;
+
   let imageData;
   try {
-    imageData = ctx.getImageData(0, 0, width, height);
+    imageData = ctx.getImageData(0, cropY, width, cropH);
   } catch (e) {
     console.error("getImageData failed (CORS?):", e);
     return null;
   }
 
   const data = imageData.data;
+  const totalPixels = width * cropH;
   let sumY = 0;
-  const totalPixels = width * height;
+  let sumDiff = 0;
 
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
+
+    // яркость
     const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     sumY += y;
+
+    // "цветность": разброс между каналами
+    const maxv = Math.max(r, g, b);
+    const minv = Math.min(r, g, b);
+    sumDiff += maxv - minv;
   }
 
   const avgY = sumY / totalPixels; // 0..255
-  return avgY / 255; // 0..1
+  const avgDiff = sumDiff / totalPixels; // 0..255
+
+  const brightness = avgY / 255; // 0..1
+  const saturationApprox = avgDiff / 255; // 0..1
+
+  // если средний разброс каналов маленький — считаем ч/б.
+  const isGray = saturationApprox < 0.08;
+
+  return { brightness, isGray };
 }
 
 /* ---------- helpers: alignment ---------- */
@@ -316,6 +340,9 @@ async function sortImagesByNumber(images) {
  * (он выставляется во время импорта через Stitch),
  * и сортируем по нему.
  *
+ * Первая цифра: 0 – ч/б, 1 – цвет.
+ * Следующие три: яркость 000..999 (000 – светлый, 999 – тёмный).
+ *
  * Если ни у одной картинки нет такого префикса — fallback на геометрию.
  */
 async function sortImagesByColor(images) {
@@ -345,7 +372,7 @@ async function sortImagesByColor(images) {
     const bc = b.code;
 
     if (ac != null && bc != null) {
-      if (ac !== bc) return ac - bc; // код меньше -> светлее -> раньше
+      if (ac !== bc) return ac - bc; // меньше код -> раньше
       return a.index - b.index;
     }
     if (ac != null) return -1;
@@ -492,8 +519,8 @@ function sortFilesByNameWithNumber(files) {
 /**
  * Stitch:
  *  - читаем выбранные файлы в dataURL,
- *  - считаем яркость каждого файла,
- *  - для каждого считаем colorCode ∈ [0000..9999],
+ *  - считаем яркость и "ч/б/цвет" для нижних 80% картинки,
+ *  - кодируем это в colorCode = [0/1][000..999],
  *  - сортируем/рандомим по имени (как раньше),
  *  - создаём картинки на доске с title: "Cxxxx originalName",
  *  - выравниваем без gap,
@@ -535,7 +562,7 @@ async function handleStitchSubmit(event) {
     const filesArray = Array.from(files);
     const fileInfos = [];
 
-    // 1. читаем dataURL и считаем яркость + colorCode
+    // 1. читаем dataURL и считаем brightness + isGray + colorCode
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
 
@@ -546,10 +573,15 @@ async function handleStitchSubmit(event) {
       const dataUrl = await readFileAsDataUrl(file);
 
       let brightness = 0.5;
+      let isGray = false;
+
       try {
         const imgEl = await loadImage(dataUrl);
-        const y = getBlurredAverageLuminanceFromImageElement(imgEl);
-        if (y != null) brightness = y;
+        const res = getBrightnessAndGrayFromImageElement(imgEl);
+        if (res) {
+          brightness = res.brightness;
+          isGray = res.isGray;
+        }
       } catch (e) {
         console.warn(
           "Failed to compute brightness for stitched image:",
@@ -558,11 +590,12 @@ async function handleStitchSubmit(event) {
         );
       }
 
-      // ярче -> меньший код
-      const rawCode = Math.round((1 - brightness) * 9999);
-      const colorCode = Math.max(0, Math.min(9999, rawCode));
+      const brightnessCodeRaw = Math.round((1 - brightness) * 999); // 0..999
+      const brightnessCode = Math.max(0, Math.min(999, brightnessCodeRaw));
+      const colorFlag = isGray ? 0 : 1; // 0 – ч/б, 1 – цвет
+      const colorCode = colorFlag * 1000 + brightnessCode; // 0..1999
 
-      fileInfos.push({ file, dataUrl, brightness, colorCode });
+      fileInfos.push({ file, dataUrl, brightness, isGray, colorCode });
     }
 
     // 2. порядок по имени/номеру (как раньше)

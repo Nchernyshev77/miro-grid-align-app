@@ -5,7 +5,6 @@ const { board } = window.miro;
 // --- color settings ---
 const SAT_CODE_MAX = 99;              // максимум кода сатурации (00..99)
 const SAT_BOOST = 4.0;                // усиливаем сатурацию, чтобы растянуть шкалу
-const SAT_GROUP_THRESHOLD = 30;       // сейчас не используем в сортировке, но оставим на будущее
 
 /* ---------- helpers: titles & numbers ---------- */
 
@@ -704,31 +703,29 @@ window.addEventListener("DOMContentLoaded", () => {
   const stitchForm = document.getElementById("stitch-form");
   if (stitchForm) stitchForm.addEventListener("submit", handleStitchSubmit);
 
-  // вкладки
-  const tabSorting = document.getElementById("tab-sorting");
-  const tabStitch = document.getElementById("tab-stitch");
-  const sectionSorting = document.getElementById("sorting-section");
-  const sectionStitch = document.getElementById("stitch-section");
+  // табы
+  const tabButtons = document.querySelectorAll(".tab-btn");
+  const tabContents = {
+    sorting: document.getElementById("tab-sorting"),
+    stitch: document.getElementById("tab-stitch"),
+  };
 
   function activateTab(name) {
-    if (!tabSorting || !tabStitch || !sectionSorting || !sectionStitch) return;
-    if (name === "sorting") {
-      tabSorting.classList.add("active");
-      tabStitch.classList.remove("active");
-      sectionSorting.classList.add("active");
-      sectionStitch.classList.remove("active");
-    } else {
-      tabSorting.classList.remove("active");
-      tabStitch.classList.add("active");
-      sectionSorting.classList.remove("active");
-      sectionStitch.classList.add("active");
-    }
+    tabButtons.forEach((btn) => {
+      const isActive = btn.dataset.tab === name;
+      btn.classList.toggle("active", isActive);
+    });
+
+    Object.entries(tabContents).forEach(([key, el]) => {
+      if (!el) return;
+      el.classList.toggle("active", key === name);
+    });
   }
 
-  if (tabSorting && tabStitch) {
-    tabSorting.addEventListener("click", () => activateTab("sorting"));
-    tabStitch.addEventListener("click", () => activateTab("stitch"));
-    // по умолчанию – Sorting
+  if (tabButtons.length && tabContents.sorting && tabContents.stitch) {
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+    });
     activateTab("sorting");
   }
 

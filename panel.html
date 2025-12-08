@@ -191,7 +191,7 @@
 
     .progress-text-main {
       margin-top: 6px;
-      font-size: 13px; /* чуть больше, чем hint */
+      font-size: 13px;
       text-align: center;
       color: #111827;
     }
@@ -310,6 +310,17 @@
           <option value="bottom-left">Bottom left</option>
           <option value="bottom-right">Bottom right</option>
         </select>
+      </div>
+
+      <div class="field">
+        <label>
+          <input
+            type="checkbox"
+            id="stitchSkipMissing"
+            name="stitchSkipMissing"
+          />
+          Skip missing tiles
+        </label>
       </div>
 
       <div class="section-title">Source files</div>

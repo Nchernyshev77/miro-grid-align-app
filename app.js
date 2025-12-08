@@ -56,7 +56,7 @@ function loadImage(url) {
 
 /**
  * Посчитать яркость и сатурацию из РАЗМЫТОГО изображения,
- * игнорируя верхние 20% по высоте.
+ * игнорируя верхние 30% по высоте и по 20% слева/справа.
  *
  * Возвращает { brightness: 0..1, saturation: 0..1 } или null при ошибке.
  */
@@ -64,7 +64,8 @@ function getBrightnessAndSaturationFromImageElement(
   img,
   smallSize = 50,
   blurPx = 3,
-  cropTopRatio = 0.2
+  cropTopRatio = 0.3,
+  cropSideRatio = 0.2
 ) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -87,18 +88,22 @@ function getBrightnessAndSaturationFromImageElement(
 
   const cropY = Math.floor(height * cropTopRatio);
   const cropH = height - cropY;
-  if (cropH <= 0) return null;
+
+  const cropX = Math.floor(width * cropSideRatio);
+  const cropW = width - 2 * cropX;
+
+  if (cropH <= 0 || cropW <= 0) return null;
 
   let imageData;
   try {
-    imageData = ctx.getImageData(0, cropY, width, cropH);
+    imageData = ctx.getImageData(cropX, cropY, cropW, cropH);
   } catch (e) {
     console.error("getImageData failed (CORS?):", e);
     return null;
   }
 
   const data = imageData.data;
-  const totalPixels = width * cropH;
+  const totalPixels = cropW * cropH;
   let sumY = 0;
   let sumDiff = 0;
 
@@ -526,13 +531,13 @@ function sortFilesByNameWithNumber(files) {
 /**
  * Stitch:
  *  - читаем выбранные файлы в dataURL,
- *  - считаем яркость и сатурацию для нижних 80% картинки,
+ *  - считаем яркость и сатурацию для центральной части (30% сверху, 20% слева/справа отрезаны),
  *  - кодируем:
  *       SS  = round( boostedSaturation * 99 )   -> 00..99
  *       BBB = round( (1-brightness) * 999 )     -> 000..999
  *       title = "CSS/BBB originalName"
  *  - сортируем/рандомим по имени (как раньше),
- *  - создаём картинки на доске,
+ *  - создаём картинки на доске в центре текущего вида,
  *  - выравниваем без gap,
  *  - зумим в область.
  */
@@ -571,6 +576,17 @@ async function handleStitchSubmit(event) {
 
     const filesArray = Array.from(files);
     const fileInfos = [];
+
+    // 0. Центр текущего вида (viewport)
+    let baseX = 0;
+    let baseY = 0;
+    try {
+      const viewport = await board.viewport.get();
+      baseX = viewport.x + viewport.width / 2;
+      baseY = viewport.y + viewport.height / 2;
+    } catch (e) {
+      console.warn("Could not get viewport, falling back to (0,0):", e);
+    }
 
     // 1. читаем dataURL и считаем brightness + saturation + коды
     for (let i = 0; i < filesArray.length; i++) {
@@ -625,8 +641,6 @@ async function handleStitchSubmit(event) {
     if (progressEl) progressEl.textContent = "Creating images…";
 
     const createdImages = [];
-    const baseX = 0;
-    const baseY = 0;
     const offsetStep = 50;
 
     const pad2 = (n) => String(n).padStart(2, "0");

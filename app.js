@@ -92,12 +92,12 @@ function getBrightnessAndSaturationFromImageElement(
     const g = data[i + 1];
     const b = data[i + 2];
 
-    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b; // яркость
     sumY += y;
 
     const maxv = Math.max(r, g, b);
     const minv = Math.min(r, g, b);
-    sumDiff += maxv - minv;
+    sumDiff += maxv - minv; // "цветность"
   }
 
   const avgY = sumY / totalPixels;
@@ -122,6 +122,7 @@ async function alignImagesInGivenOrder(images, config) {
 
   if (!images.length) return;
 
+  // нормализация размера
   if (sizeMode === "width") {
     const targetWidth = Math.min(...images.map((img) => img.width));
     for (const img of images) img.width = targetWidth;
@@ -337,9 +338,9 @@ async function sortImagesByColor(images) {
 
   meta.sort((a, b) => {
     if (a.hasCode && b.hasCode) {
-      if (a.group !== b.group) return a.group - b.group;         // серые → цветные
-      if (a.briCode !== b.briCode) return a.briCode - b.briCode; // светлее → темнее
-      if (a.satCode !== b.satCode) return a.satCode - b.satCode; // бледнее → насыщеннее
+      if (a.group !== b.group) return a.group - b.group;
+      if (a.briCode !== b.briCode) return a.briCode - b.briCode;
+      if (a.satCode !== b.satCode) return a.satCode - b.satCode;
       return a.index - b.index;
     }
     if (a.hasCode) return -1;
@@ -350,7 +351,7 @@ async function sortImagesByColor(images) {
   return meta.map((m) => m.img);
 }
 
-/* ---------- SORTING: handler ---------- */
+/* ---------- SORTING handler ---------- */
 
 async function handleSortingSubmit(event) {
   event.preventDefault();
@@ -473,7 +474,7 @@ function sortFilesByNameWithNumber(files) {
   return arr.map((m) => m.file);
 }
 
-/* ---------- STITCH handler (с прогресс-баром и ETA) ---------- */
+/* ---------- STITCH handler с простым прогресс-баром и ETA ---------- */
 
 async function handleStitchSubmit(event) {
   event.preventDefault();
@@ -482,51 +483,29 @@ async function handleStitchSubmit(event) {
   const progressTextEl = document.getElementById("stitchProgress");
   const progressBarEl = document.getElementById("stitchProgressBar");
 
-  const setProgress = (() => {
-    let totalUnits = 1;
-    let doneUnits = 0;
-    let startTime = performance.now();
+  const setProgress = (label, doneSteps, totalSteps, startTime) => {
+    const frac = totalSteps > 0 ? doneSteps / totalSteps : 0;
+    if (progressBarEl) {
+      progressBarEl.style.width = `${(frac * 100).toFixed(1)}%`;
+    }
 
-    return (opts) => {
-      const { initTotal, addDone, label } = opts;
+    let etaText = "";
+    if (doneSteps > 0 && doneSteps < totalSteps) {
+      const elapsed = (performance.now() - startTime) / 1000;
+      const remaining = (elapsed * (totalSteps - doneSteps)) / doneSteps;
+      const mins = Math.floor(remaining / 60);
+      const secs = Math.round(remaining % 60);
+      const secsStr = secs.toString().padStart(2, "0");
+      etaText =
+        " · ~" +
+        (mins ? `${mins}m ${secsStr}s` : `${secsStr}s`) +
+        " left";
+    }
 
-      if (initTotal) {
-        totalUnits = initTotal;
-        doneUnits = 0;
-        startTime = performance.now();
-      }
-
-      if (addDone) {
-        doneUnits += addDone;
-        if (doneUnits > totalUnits) doneUnits = totalUnits;
-      }
-
-      const fraction = totalUnits > 0 ? doneUnits / totalUnits : 0;
-      if (progressBarEl) {
-        progressBarEl.style.width = `${(fraction * 100).toFixed(1)}%`;
-      }
-
-      let etaText = "";
-      if (doneUnits > 0 && doneUnits < totalUnits) {
-        const elapsed = (performance.now() - startTime) / 1000;
-        const remaining =
-          (elapsed * (totalUnits - doneUnits)) / doneUnits || 0;
-        const mins = Math.floor(remaining / 60);
-        const secs = Math.round(remaining % 60);
-        const secsStr = secs.toString().padStart(2, "0");
-        etaText =
-          " · ~" +
-          (mins ? `${mins}m ${secsStr}s` : `${secsStr}s`) +
-          " left";
-      }
-
-      if (progressTextEl) {
-        progressTextEl.textContent = label
-          ? label + (etaText || "")
-          : etaText || "";
-      }
-    };
-  })();
+    if (progressTextEl) {
+      progressTextEl.textContent = label + (etaText || "");
+    }
+  };
 
   try {
     const form = document.getElementById("stitch-form");
@@ -553,10 +532,13 @@ async function handleStitchSubmit(event) {
     }
 
     if (stitchButton) stitchButton.disabled = true;
+    if (progressBarEl) progressBarEl.style.width = "0%";
+    if (progressTextEl) progressTextEl.textContent = "";
 
     const filesArray = Array.from(files);
-    const totalUnits = filesArray.length * 2 + 1; // read+analyze, create, align
-    setProgress({ initTotal: totalUnits, label: "Starting…" });
+    const totalSteps = filesArray.length * 2 + 1; // чтение+анализ, создание, выравнивание
+    let doneSteps = 0;
+    const startTime = performance.now();
 
     const fileInfos = [];
 
@@ -574,11 +556,8 @@ async function handleStitchSubmit(event) {
     // чтение и анализ
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
-
-      setProgress({
-        addDone: i === 0 ? 0 : 0, // прогресс обновится текстом, сами units добавим ниже
-        label: `Processing ${i + 1} / ${filesArray.length}…`,
-      });
+      const label = `Processing ${i + 1} / ${filesArray.length}…`;
+      setProgress(label, doneSteps, totalSteps, startTime);
 
       const dataUrl = await readFileAsDataUrl(file);
 
@@ -609,13 +588,12 @@ async function handleStitchSubmit(event) {
 
       fileInfos.push({ file, dataUrl, brightness, saturation, briCode, satCode });
 
-      setProgress({ addDone: 1, label: `Processing ${i + 1} / ${filesArray.length}…` });
+      doneSteps++;
+      setProgress(label, doneSteps, totalSteps, startTime);
     }
 
     // сортировка файлов
-    setProgress({
-      label: "Ordering files…",
-    });
+    setProgress("Ordering files…", doneSteps, totalSteps, startTime);
 
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
     const infoByFile = new Map();
@@ -632,10 +610,8 @@ async function handleStitchSubmit(event) {
     for (let i = 0; i < orderedInfos.length; i++) {
       const info = orderedInfos[i];
       const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${info.file.name}`;
-
-      setProgress({
-        label: `Creating ${i + 1} / ${orderedInfos.length}…`,
-      });
+      const label = `Creating ${i + 1} / ${orderedInfos.length}…`;
+      setProgress(label, doneSteps, totalSteps, startTime);
 
       const img = await board.createImage({
         url: info.dataUrl,
@@ -645,11 +621,13 @@ async function handleStitchSubmit(event) {
       });
 
       createdImages.push(img);
-      setProgress({ addDone: 1, label: `Creating ${i + 1} / ${orderedInfos.length}…` });
+
+      doneSteps++;
+      setProgress(label, doneSteps, totalSteps, startTime);
     }
 
     // выравнивание
-    setProgress({ label: "Aligning images…" });
+    setProgress("Aligning images…", doneSteps, totalSteps, startTime);
     await alignImagesInGivenOrder(createdImages, {
       imagesPerRow,
       horizontalGap: 0,
@@ -657,7 +635,8 @@ async function handleStitchSubmit(event) {
       sizeMode: "none",
       startCorner,
     });
-    setProgress({ addDone: 1, label: "Done." });
+    doneSteps++;
+    setProgress("Done.", doneSteps, totalSteps, startTime);
 
     try {
       await board.viewport.zoomTo(createdImages);

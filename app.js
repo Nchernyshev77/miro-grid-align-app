@@ -5,7 +5,7 @@ const { board } = window.miro;
 // --- настройка цвета ---
 const SAT_THRESHOLD = 0.15;          // порог по сатурации
 const SAT_CODE_MAX = 99;             // максимум кода сатурации (00..99)
-const SAT_GROUP_THRESHOLD = 8;      // коды 0..15 считаем "почти серыми"
+const SAT_GROUP_THRESHOLD = 10;      // коды 0..15 считаем "почти серыми"
 
 /* ---------- helpers: titles & numbers ---------- */
 
@@ -686,5 +686,6 @@ window.addEventListener("DOMContentLoaded", () => {
   const stitchForm = document.getElementById("stitch-form");
   if (stitchForm) stitchForm.addEventListener("submit", handleStitchSubmit);
 });
+
 
 

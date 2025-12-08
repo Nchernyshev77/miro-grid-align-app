@@ -184,7 +184,8 @@
       color: #6b7280;
     }
 
-    #stitchFolderInput {
+    #stitchFolderInput,
+    #sliceFileInput {
       display: none;
     }
 
@@ -222,12 +223,13 @@
 </head>
 <body>
   <div class="tabs">
-    <button class="tab-btn active" data-tab="sorting">Sorting</button>
-    <button class="tab-btn" data-tab="stitch">Stitch</button>
+    <button class="tab-btn" data-tab="sorting">Sorting</button>
+    <button class="tab-btn active" data-tab="stitch">Stitch</button>
+    <button class="tab-btn" data-tab="slice">Slice</button>
   </div>
 
   <!-- TAB 1: SORTING -->
-  <div id="tab-sorting" class="tab-content active">
+  <div id="tab-sorting" class="tab-content">
     <form id="sorting-form">
       <div class="section-title">Grid</div>
 
@@ -301,7 +303,7 @@
   </div>
 
   <!-- TAB 2: STITCH -->
-  <div id="tab-stitch" class="tab-content">
+  <div id="tab-stitch" class="tab-content active">
     <form id="stitch-form">
       <div class="section-title">Grid</div>
 
@@ -371,6 +373,45 @@
       </div>
       <div id="stitchProgressMain" class="progress-text-main"></div>
       <div id="stitchProgressEta" class="progress-text-eta"></div>
+    </form>
+  </div>
+
+  <!-- TAB 3: SLICE -->
+  <div id="tab-slice" class="tab-content">
+    <form id="slice-form">
+      <div class="section-title">Source files</div>
+
+      <div class="field">
+        <div class="file-picker">
+          <button
+            type="button"
+            id="sliceFileButton"
+            class="file-picker-button"
+          >
+            Select files
+          </button>
+          <span id="sliceFileLabel" class="file-picker-label">
+            No files selected
+          </span>
+          <input
+            id="sliceFileInput"
+            name="sliceFileInput"
+            type="file"
+            multiple
+            accept="image/*"
+          />
+        </div>
+      </div>
+
+      <button type="submit" id="sliceButton" class="primary">
+        Slice
+      </button>
+
+      <div class="progress-container">
+        <div id="sliceProgressBar" class="progress-fill"></div>
+      </div>
+      <div id="sliceProgressMain" class="progress-text-main"></div>
+      <div id="sliceProgressEta" class="progress-text-eta"></div>
     </form>
   </div>
 </body>

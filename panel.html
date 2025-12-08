@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Image Tools – panel</title>
+  <title>Image Align Tool – panel</title>
 
   <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
   <script src="app.js" defer></script>
@@ -30,13 +30,13 @@
     .subtitle {
       font-size: 12px;
       opacity: 0.7;
-      margin-bottom: 12px;
+      margin: 6px 0 12px;
     }
 
     .tabs {
       display: flex;
       gap: 4px;
-      margin-bottom: 12px;
+      margin-bottom: 4px;
     }
 
     .tab-btn {
@@ -186,15 +186,13 @@
   </style>
 </head>
 <body>
-  <h1>Image Tools</h1>
-  <div class="subtitle">
-    Sort and stitch images into precise grids.
-  </div>
+  <h1>Image Align Tool</h1>
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="sorting">Sorting</button>
     <button class="tab-btn" data-tab="stitch">Stitch</button>
   </div>
+  <div id="tab-description" class="subtitle"></div>
 
   <!-- TAB 1: SORTING -->
   <div id="tab-sorting" class="tab-content active">
@@ -306,10 +304,10 @@
             id="stitchFileButton"
             class="file-picker-button"
           >
-            Choose files
+            Select files
           </button>
           <span id="stitchFileLabel" class="file-picker-label">
-            No files chosen
+            No files selected
           </span>
           <input
             id="stitchFolderInput"

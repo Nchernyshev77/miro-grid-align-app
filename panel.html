@@ -84,13 +84,11 @@
       gap: 4px;
     }
 
-    /* общий стиль для label */
     label {
       font-size: 13px;
       opacity: 0.9;
     }
 
-    /* строка с чекбоксом – галка и текст в одну линию */
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -117,7 +115,6 @@
       box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);
     }
 
-    /* синий чекбокс, чуть крупнее */
     input[type="checkbox"] {
       accent-color: #2563eb;
       width: 14px;
@@ -147,15 +144,6 @@
       transform: translateY(1px);
     }
 
-    .hint {
-      margin-top: 8px;
-      font-size: 11px;
-      opacity: 0.7;
-      line-height: 1.4;
-    }
-
-    /* кастомный файл-пикер */
-
     .file-picker {
       display: flex;
       align-items: center;
@@ -184,12 +172,9 @@
       color: #6b7280;
     }
 
-    #stitchFolderInput,
-    #sliceFileInput {
+    #stitchFolderInput {
       display: none;
     }
-
-    /* прогресс-бар */
 
     .progress-container {
       margin-top: 8px;
@@ -224,8 +209,7 @@
 <body>
   <div class="tabs">
     <button class="tab-btn" data-tab="sorting">Sorting</button>
-    <button class="tab-btn active" data-tab="stitch">Stitch</button>
-    <button class="tab-btn" data-tab="slice">Slice</button>
+    <button class="tab-btn active" data-tab="stitch">Stitch/Slice</button>
   </div>
 
   <!-- TAB 1: SORTING -->
@@ -302,7 +286,7 @@
     </form>
   </div>
 
-  <!-- TAB 2: STITCH -->
+  <!-- TAB 2: STITCH/SLICE -->
   <div id="tab-stitch" class="tab-content active">
     <form id="stitch-form">
       <div class="section-title">Grid</div>
@@ -365,7 +349,7 @@
       </div>
 
       <button type="submit" id="stitchButton" class="primary">
-        Import
+        Stitch / Slice
       </button>
 
       <div class="progress-container">
@@ -373,45 +357,6 @@
       </div>
       <div id="stitchProgressMain" class="progress-text-main"></div>
       <div id="stitchProgressEta" class="progress-text-eta"></div>
-    </form>
-  </div>
-
-  <!-- TAB 3: SLICE -->
-  <div id="tab-slice" class="tab-content">
-    <form id="slice-form">
-      <div class="section-title">Source files</div>
-
-      <div class="field">
-        <div class="file-picker">
-          <button
-            type="button"
-            id="sliceFileButton"
-            class="file-picker-button"
-          >
-            Select files
-          </button>
-          <span id="sliceFileLabel" class="file-picker-label">
-            No files selected
-          </span>
-          <input
-            id="sliceFileInput"
-            name="sliceFileInput"
-            type="file"
-            multiple
-            accept="image/*"
-          />
-        </div>
-      </div>
-
-      <button type="submit" id="sliceButton" class="primary">
-        Slice
-      </button>
-
-      <div class="progress-container">
-        <div id="sliceProgressBar" class="progress-fill"></div>
-      </div>
-      <div id="sliceProgressMain" class="progress-text-main"></div>
-      <div id="sliceProgressEta" class="progress-text-eta"></div>
     </form>
   </div>
 </body>

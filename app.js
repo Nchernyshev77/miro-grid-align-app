@@ -144,7 +144,7 @@ function getBrightnessAndSaturationFromImageElement(
   return { brightness, saturation: saturationApprox };
 }
 
-// ---------- helpers: alignment (используется в Sorting) ----------
+// ---------- alignment (Sorting) ----------
 
 async function alignImagesInGivenOrder(images, config) {
   const {
@@ -372,7 +372,7 @@ async function sortImagesByColor(images) {
 
   meta.sort((a, b) => {
     if (a.hasCode && b.hasCode) {
-      if (a.group !== b.group) return a.group - b.group;      // серые → цветные
+      if (a.group !== b.group) return a.group - b.group;        // серые → цветные
       if (a.briCode !== b.briCode) return a.briCode - b.briCode; // светлее → темнее
       if (a.satCode !== b.satCode) return a.satCode - b.satCode; // бледнее → насыщеннее
       return a.index - b.index;
@@ -535,7 +535,13 @@ function canvasToDataUrlUnderLimit(canvas, maxBytes = MAX_URL_BYTES) {
  * Вычисляет центры "слотов" для файлов (все размеры разные),
  * без пропусков, с учётом startCorner.
  */
-function computeVariableSlotCenters(orderedInfos, imagesPerRow, startCorner, viewCenterX, viewCenterY) {
+function computeVariableSlotCenters(
+  orderedInfos,
+  imagesPerRow,
+  startCorner,
+  viewCenterX,
+  viewCenterY
+) {
   const totalSlots = orderedInfos.length;
   if (!totalSlots) return [];
 
@@ -623,7 +629,13 @@ function computeVariableSlotCenters(orderedInfos, imagesPerRow, startCorner, vie
  * Вычисляет центры "слотов" при Skip missing tiles.
  * Все тайлы считаются одного размера (по первому).
  */
-function computeSkipMissingSlotCenters(tileInfos, imagesPerRow, startCorner, viewCenterX, viewCenterY) {
+function computeSkipMissingSlotCenters(
+  tileInfos,
+  imagesPerRow,
+  startCorner,
+  viewCenterX,
+  viewCenterY
+) {
   if (!tileInfos.length) return [];
 
   const numbered = tileInfos.map(({ info, num }) => ({ info, num }));
@@ -887,7 +899,7 @@ async function handleStitchSubmit(event) {
       0
     );
 
-    if (anySliced && form.stitchSkipMissing.checked) {
+    if (anySliced && skipMissingTiles) {
       await board.notifications.showInfo(
         '“Skip missing tiles” is ignored for large images (Stitch/Slice).'
       );
@@ -903,7 +915,7 @@ async function handleStitchSubmit(event) {
       return extractTrailingNumber(name) !== null;
     });
 
-    if (!anySliced && form.stitchSkipMissing.checked && hasAnyNumber) {
+    if (!anySliced && skipMissingTiles && hasAnyNumber) {
       // режим Skip missing tiles (все файлы маленькие, есть номера)
       const tileInfos = [];
       let minNum = Infinity;
@@ -919,7 +931,6 @@ async function handleStitchSubmit(event) {
       }
 
       if (!tileInfos.length) {
-        // номеров нет — fallback к обычной сетке
         slotCentersArray = computeVariableSlotCenters(
           orderedInfos,
           imagesPerRow,
@@ -968,8 +979,6 @@ async function handleStitchSubmit(event) {
 
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
-    canvas.width = SLICE_TILE_SIZE;
-    canvas.height = SLICE_TILE_SIZE;
 
     const updateCreationProgress = () => {
       setProgress(createdTiles, totalTiles);
@@ -1053,7 +1062,11 @@ async function handleStitchSubmit(event) {
             const sw = Math.min(SLICE_TILE_SIZE, width - sx);
             const sh = Math.min(SLICE_TILE_SIZE, height - sy);
 
-            ctx.clearRect(0, 0, SLICE_TILE_SIZE, SLICE_TILE_SIZE);
+            // 👇 ключевое изменение: холст подгоняем под реальный размер тайла
+            canvas.width = sw;
+            canvas.height = sh;
+            ctx.clearRect(0, 0, sw, sh);
+
             ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
 
             const tileDataUrl = canvasToDataUrlUnderLimit(canvas);
@@ -1113,6 +1126,7 @@ async function handleStitchSubmit(event) {
       "Something went wrong while importing images. Please check the console."
     );
   } finally {
+    const stitchButton = document.getElementById("stitchButton");
     if (stitchButton) stitchButton.disabled = false;
   }
 }

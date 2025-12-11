@@ -979,7 +979,7 @@ async function handleStitchSubmit(event) {
       }
     };
 
-        for (let i = 0; i < orderedInfos.length; i++) {
+    for (let i = 0; i < orderedInfos.length; i++) {
       const info = orderedInfos[i];
       const { file, needsSlice, imgEl, width, height, tilesX, tilesY } = info;
 
@@ -1025,30 +1025,30 @@ async function handleStitchSubmit(event) {
           urlToUse = compressed;
         }
 
-                  const t0 = performance.now();
-          const imgWidget = await board.createImage({
-            url: urlToUse,
-            x: center.x,
-            y: center.y,
-            title,
+        const t0 = performance.now();
+        const imgWidget = await board.createImage({
+          url: urlToUse,
+          x: center.x,
+          y: center.y,
+          title,
+        });
+        const t1 = performance.now();
+
+        try {
+          await imgWidget.setMetadata(META_APP_ID, {
+            fileName: originalName,
+            satCode: info.satCode,
+            briCode: info.briCode,
           });
-          const t1 = performance.now();
+        } catch (e) {
+          console.warn("setMetadata failed (small image):", e);
+        }
 
-          try {
-            await imgWidget.setMetadata(META_APP_ID, {
-              fileName: originalName,
-              satCode: info.satCode,
-              briCode: info.briCode,
-            });
-          } catch (e) {
-            console.warn("setMetadata failed (small image):", e);
-          }
-
-          allCreatedTiles.push(imgWidget);
-          createdTiles += 1;
-          creationCount += 1;
-          creationTimeSumMs += t1 - t0;
-          updateCreationProgress();
+        allCreatedTiles.push(imgWidget);
+        createdTiles += 1;
+        creationCount += 1;
+        creationTimeSumMs += t1 - t0;
+        updateCreationProgress();
       } else {
         const colWidths = [];
         const rowHeights = [];
@@ -1116,31 +1116,30 @@ async function handleStitchSubmit(event) {
 
             const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${tileFullName}`;
 
-                          const t0 = performance.now();
-              const tileWidget = await board.createImage({
-                url: tileDataUrl,
-                x: centerX,
-                y: centerY,
-                title,
-  
-              const t1 = performance.now();
-
-              try {
-                await tileWidget.setMetadata(META_APP_ID, {
-                  fileName: tileFullName,
-                  satCode: info.satCode,
-                  briCode: info.briCode,
-                });
-              } catch (e) {
-                console.warn("setMetadata failed (slice tile):", e);
-              }
-
-              allCreatedTiles.push(tileWidget);
-              createdTiles++;
-              creationCount++;
-              creationTimeSumMs += t1 - t0;
-              updateCreationProgress();
+            const t0 = performance.now();
+            const tileWidget = await board.createImage({
+              url: tileDataUrl,
+              x: centerX,
+              y: centerY,
+              title,
             });
+            const t1 = performance.now();
+
+            try {
+              await tileWidget.setMetadata(META_APP_ID, {
+                fileName: tileFullName,
+                satCode: info.satCode,
+                briCode: info.briCode,
+              });
+            } catch (e) {
+              console.warn("setMetadata failed (slice tile):", e);
+            }
+
+            allCreatedTiles.push(tileWidget);
+            createdTiles++;
+            creationCount++;
+            creationTimeSumMs += t1 - t0;
+            updateCreationProgress();
           }
         }
       }

@@ -11,7 +11,7 @@ const SLICE_TILE_SIZE = 4096;
 const SLICE_THRESHOLD_WIDTH = 8192;
 const SLICE_THRESHOLD_HEIGHT = 4096;
 let   MAX_SLICE_DIM = 16384;         // уточняем через WebGL
-const MAX_URL_BYTES = 30000000;      // лимит размера dataURL
+const MAX_URL_BYTES = 29000000;      // лимит размера dataURL (~29 МБ, есть запас до 30 МБ)
 
 const META_APP_ID = "image-align-tool";
 
@@ -993,9 +993,32 @@ async function handleStitchSubmit(event) {
       if (!needsSlice) {
         const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${originalName}`;
 
+        let urlToUse = info.dataUrl;
+
+        // Если dataURL слишком большой, слегка сжимаем изображение через canvas,
+        // чтобы уложиться в лимит MAX_URL_BYTES и не потерять сильно в качестве.
+        if (urlToUse.length > MAX_URL_BYTES) {
+          canvas.width = width;
+          canvas.height = height;
+          ctx.clearRect(0, 0, width, height);
+          ctx.drawImage(imgEl, 0, 0, width, height);
+
+          const compressed = canvasToDataUrlUnderLimit(canvas);
+          if (!compressed) {
+            await board.notifications.showError(
+              `Image "${file.name}" is too large even after compression. Skipped.`
+            );
+            createdTiles += 1;
+            updateCreationProgress();
+            continue;
+          }
+
+          urlToUse = compressed;
+        }
+
         const t0 = performance.now();
         const imgWidget = await board.createImage({
-          url: info.dataUrl,
+          url: urlToUse,
           x: center.x,
           y: center.y,
           title,
@@ -1201,3 +1224,4 @@ window.addEventListener("DOMContentLoaded", () => {
     updateLabel();
   }
 });
+

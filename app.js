@@ -804,6 +804,8 @@ async function handleStitchSubmit(event) {
 
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
+      // Обновляем прогресс на этапе подготовки файлов
+      setProgress(i + 1, filesArray.length, "Preparing files…");
 
       const dataUrl = await readFileAsDataUrl(file);
 
@@ -891,9 +893,6 @@ async function handleStitchSubmit(event) {
         tilesY,
         numTiles,
       });
-
-      const done = i + 1;
-      setProgress(done, filesArray.length, `Preparing files… (${done}/${filesArray.length})`);
     }
 
     if (!fileInfos.length) {

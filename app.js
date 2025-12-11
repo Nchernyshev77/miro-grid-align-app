@@ -979,6 +979,31 @@ async function handleStitchSubmit(event) {
       }
     };
 
+    
+    const MAX_PARALLEL_TILES = 3;
+    const activeTileCreates = [];
+
+    async function scheduleTileCreate(fn) {
+      let wrappedPromise;
+      const p = (async () => {
+        try {
+          await fn();
+        } catch (e) {
+          console.error("Error during tile creation:", e);
+        } finally {
+          const idx = activeTileCreates.indexOf(wrappedPromise);
+          if (idx !== -1) {
+            activeTileCreates.splice(idx, 1);
+          }
+        }
+      })();
+      wrappedPromise = p;
+      activeTileCreates.push(wrappedPromise);
+      if (activeTileCreates.length >= MAX_PARALLEL_TILES) {
+        await Promise.race(activeTileCreates);
+      }
+    }
+
     for (let i = 0; i < orderedInfos.length; i++) {
       const info = orderedInfos[i];
       const { file, needsSlice, imgEl, width, height, tilesX, tilesY } = info;
@@ -1025,30 +1050,32 @@ async function handleStitchSubmit(event) {
           urlToUse = compressed;
         }
 
-        const t0 = performance.now();
-        const imgWidget = await board.createImage({
-          url: urlToUse,
-          x: center.x,
-          y: center.y,
-          title,
-        });
-        const t1 = performance.now();
-
-        try {
-          await imgWidget.setMetadata(META_APP_ID, {
-            fileName: originalName,
-            satCode: info.satCode,
-            briCode: info.briCode,
+        await scheduleTileCreate(async () => {
+          const t0 = performance.now();
+          const imgWidget = await board.createImage({
+            url: urlToUse,
+            x: center.x,
+            y: center.y,
+            title,
           });
-        } catch (e) {
-          console.warn("setMetadata failed (small image):", e);
-        }
+          const t1 = performance.now();
 
-        allCreatedTiles.push(imgWidget);
-        createdTiles += 1;
-        creationCount += 1;
-        creationTimeSumMs += t1 - t0;
-        updateCreationProgress();
+          try {
+            await imgWidget.setMetadata(META_APP_ID, {
+              fileName: originalName,
+              satCode: info.satCode,
+              briCode: info.briCode,
+            });
+          } catch (e) {
+            console.warn("setMetadata failed (small image):", e);
+          }
+
+          allCreatedTiles.push(imgWidget);
+          createdTiles += 1;
+          creationCount += 1;
+          creationTimeSumMs += t1 - t0;
+          updateCreationProgress();
+        });
       } else {
         const colWidths = [];
         const rowHeights = [];
@@ -1116,33 +1143,39 @@ async function handleStitchSubmit(event) {
 
             const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${tileFullName}`;
 
-            const t0 = performance.now();
-            const tileWidget = await board.createImage({
-              url: tileDataUrl,
-              x: centerX,
-              y: centerY,
-              title,
-            });
-            const t1 = performance.now();
-
-            try {
-              await tileWidget.setMetadata(META_APP_ID, {
-                fileName: tileFullName,
-                satCode: info.satCode,
-                briCode: info.briCode,
+            await scheduleTileCreate(async () => {
+              const t0 = performance.now();
+              const tileWidget = await board.createImage({
+                url: tileDataUrl,
+                x: centerX,
+                y: centerY,
+                title,
               });
-            } catch (e) {
-              console.warn("setMetadata failed (slice tile):", e);
-            }
+              const t1 = performance.now();
 
-            allCreatedTiles.push(tileWidget);
-            createdTiles++;
-            creationCount++;
-            creationTimeSumMs += t1 - t0;
-            updateCreationProgress();
+              try {
+                await tileWidget.setMetadata(META_APP_ID, {
+                  fileName: tileFullName,
+                  satCode: info.satCode,
+                  briCode: info.briCode,
+                });
+              } catch (e) {
+                console.warn("setMetadata failed (slice tile):", e);
+              }
+
+              allCreatedTiles.push(tileWidget);
+              createdTiles++;
+              creationCount++;
+              creationTimeSumMs += t1 - t0;
+              updateCreationProgress();
+            });
           }
         }
       }
+    }
+
+    if (activeTileCreates.length > 0) {
+      await Promise.all(activeTileCreates);
     }
 
     setProgress(totalTiles, totalTiles);

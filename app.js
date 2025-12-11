@@ -12,6 +12,7 @@ const SLICE_THRESHOLD_WIDTH = 8192;
 const SLICE_THRESHOLD_HEIGHT = 4096;
 let   MAX_SLICE_DIM = 16384;         // уточняем через WebGL
 const MAX_URL_BYTES = 29000000;      // лимит размера dataURL (~29 МБ, есть запас до 30 МБ)
+const TARGET_URL_BYTES = 8000000;   // целевой размер для сжатия (~8 МБ на тайл)
 
 const META_APP_ID = "image-align-tool";
 
@@ -508,25 +509,58 @@ function sortFilesByNameWithNumber(files) {
   return arr.map((m) => m.file);
 }
 
-function canvasToDataUrlUnderLimit(canvas, maxBytes = MAX_URL_BYTES) {
-  let quality = 0.9;
-  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+function canvasToDataUrlUnderLimit(canvas, maxBytes = TARGET_URL_BYTES) {
+  // Сжимает содержимое canvas в JPEG так, чтобы dataURL не превышал maxBytes.
+  // Используем бинарный поиск по качеству в диапазоне [0.6, 0.95],
+  // чтобы сохранить максимум качества при заданном лимите.
+  let lowQ = 0.6;
+  let highQ = 0.95;
+  let bestDataUrl = null;
+  let bestQ = lowQ;
 
-  while (dataUrl.length > maxBytes && quality > 0.3) {
-    quality -= 0.1;
-    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  // Сначала пробуем с верхним качеством
+  let testDataUrl = canvas.toDataURL("image/jpeg", highQ);
+  if (testDataUrl.length <= maxBytes) {
+    // Уже помещается при почти максимальном качестве
+    if (testDataUrl.length > MAX_URL_BYTES) {
+      console.error(
+        "canvasToDataUrlUnderLimit: dataURL exceeds hard limit even at initial quality",
+        testDataUrl.length,
+        "bytes"
+      );
+      return null;
+    }
+    return testDataUrl;
   }
 
-  if (dataUrl.length > maxBytes) {
+  // Бинарный поиск по качеству
+  for (let i = 0; i < 6; i++) {
+    const q = (lowQ + highQ) / 2;
+    const dataUrl = canvas.toDataURL("image/jpeg", q);
+
+    if (dataUrl.length > maxBytes) {
+      // Всё ещё слишком большой размер — уменьшаем качество
+      highQ = q;
+    } else {
+      // Уложились в лимит — запоминаем как лучший вариант и пробуем поднять качество
+      bestDataUrl = dataUrl;
+      bestQ = q;
+      lowQ = q;
+    }
+  }
+
+  const finalDataUrl = bestDataUrl || canvas.toDataURL("image/jpeg", lowQ);
+
+  if (finalDataUrl.length > MAX_URL_BYTES) {
     console.error(
-      "Slice: tile dataURL is still too large after compression:",
-      dataUrl.length,
+      "canvasToDataUrlUnderLimit: dataURL is too large even after compression",
+      finalDataUrl.length,
       "bytes"
     );
     return null;
   }
 
-  return dataUrl;
+  return finalDataUrl;
 }
 
 function computeVariableSlotCenters(
@@ -996,8 +1030,8 @@ async function handleStitchSubmit(event) {
         let urlToUse = info.dataUrl;
 
         // Если dataURL слишком большой, слегка сжимаем изображение через canvas,
-        // чтобы уложиться в лимит MAX_URL_BYTES и не потерять сильно в качестве.
-        if (urlToUse.length > MAX_URL_BYTES) {
+        // чтобы уложиться в целевой лимит TARGET_URL_BYTES и не потерять сильно в качестве.
+        if (urlToUse.length > TARGET_URL_BYTES) {
           canvas.width = width;
           canvas.height = height;
           ctx.clearRect(0, 0, width, height);

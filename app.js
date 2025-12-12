@@ -715,11 +715,28 @@ async function handleStitchSubmit(event) {
   const progressMainEl = document.getElementById("stitchProgressMain");
   const progressEtaEl = document.getElementById("stitchProgressEta");
 
+  // Stage label under the progress bar (inserted dynamically to avoid editing panel.html)
+  let progressStageEl = document.getElementById("stitchProgressStage");
+  if (!progressStageEl && progressMainEl && progressMainEl.parentNode) {
+    progressStageEl = document.createElement("div");
+    progressStageEl.id = "stitchProgressStage";
+    progressStageEl.style.textAlign = "center";
+    progressStageEl.style.fontWeight = "600";
+    progressStageEl.style.margin = "6px 0 2px";
+    progressStageEl.style.fontSize = "12px";
+    progressStageEl.style.userSelect = "none";
+    progressMainEl.parentNode.insertBefore(progressStageEl, progressMainEl);
+  }
+
+
   const STAGES_TOTAL = 2;
   let stageIndex = 1; // 1/2 = Preparing, 2/2 = Uploading
 
   const setStage = (idx) => {
     stageIndex = Math.max(1, Math.min(STAGES_TOTAL, idx));
+    if (progressStageEl) {
+      progressStageEl.textContent = `Stage ${stageIndex}/${STAGES_TOTAL}`;
+    }
   };
 
   const setProgress = (done, total, labelOverride) => {
@@ -733,8 +750,7 @@ async function handleStitchSubmit(event) {
   if (!progressMainEl) return;
 
   const labelRaw = labelOverride !== undefined ? String(labelOverride) : "Creating";
-  const stagePrefix = `${stageIndex}/${STAGES_TOTAL} `;
-  const label = `${stagePrefix}${labelRaw}`;
+  const label = labelRaw;
 
   if (total > 0) {
     if (done < total) {
@@ -799,6 +815,48 @@ async function handleStitchSubmit(event) {
     const PREP_EXTRA_STEPS = 4; // sorting + indexing + tile counting + layout planning
     const prepTotalSteps = filesArray.length + PREP_EXTRA_STEPS;
 
+    // ---- ETA for preparing (Stage 1/2) ----
+    let prepStartTs = null;
+    let prepLastTs = null;
+    let prepLastDone = 0;
+    let ewmaPrepRateStepsPerMs = null;
+    const PREP_ETA_EWMA_ALPHA = 0.25;
+
+    const startPrepEta = () => {
+      prepStartTs = performance.now();
+      prepLastTs = prepStartTs;
+      prepLastDone = 0;
+      ewmaPrepRateStepsPerMs = null;
+      setEtaText(null);
+    };
+
+    const updatePrepEta = (doneSteps, totalSteps) => {
+      if (!prepStartTs || !Number.isFinite(totalSteps) || totalSteps <= 0) return;
+
+      const now = performance.now();
+      const dt = now - (prepLastTs || now);
+      const dd = doneSteps - prepLastDone;
+
+      if (dt < 200 || dd <= 0) return;
+
+      const instRate = dd / dt; // steps per ms
+      ewmaPrepRateStepsPerMs =
+        ewmaPrepRateStepsPerMs == null
+          ? instRate
+          : PREP_ETA_EWMA_ALPHA * instRate + (1 - PREP_ETA_EWMA_ALPHA) * ewmaPrepRateStepsPerMs;
+
+      prepLastTs = now;
+      prepLastDone = doneSteps;
+
+      const remaining = totalSteps - doneSteps;
+      if (remaining <= 0 || !ewmaPrepRateStepsPerMs || ewmaPrepRateStepsPerMs <= 0) {
+        setEtaText(null);
+        return;
+      }
+      const etaMs = remaining / ewmaPrepRateStepsPerMs;
+      setEtaText(etaMs);
+    };
+
     let viewCenterX = 0;
     let viewCenterY = 0;
     try {
@@ -812,12 +870,14 @@ async function handleStitchSubmit(event) {
     const fileInfos = [];
     let anySliced = false;
 
-    setProgress(0, prepTotalSteps, "Preparing files…");
+        startPrepEta();
+setProgress(0, prepTotalSteps, "Preparing files…");
 
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
       // Обновляем прогресс на этапе подготовки файлов
       setProgress(i + 1, prepTotalSteps, "Preparing files…");
+      updatePrepEta(i + 1, prepTotalSteps);
       // Даем браузеру шанс отрисовать прогресс на больших партиях
       await new Promise((r) => setTimeout(r, 0));
 // Используем object URL вместо dataURL, чтобы не держать гигантские base64-строки в памяти.
@@ -926,6 +986,7 @@ try {
     // 1) sorting
     prepDone += 1;
     setProgress(prepDone, prepTotalSteps, "Preparing files… (sorting)");
+    updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
@@ -933,6 +994,7 @@ try {
     // 2) indexing
     prepDone += 1;
     setProgress(prepDone, prepTotalSteps, "Preparing files… (indexing)");
+    updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
     const infoByFile = new Map();
     fileInfos.forEach((info) => infoByFile.set(info.file, info));
@@ -950,6 +1012,7 @@ try {
     // 3) tile counting
     prepDone += 1;
     setProgress(prepDone, prepTotalSteps, "Preparing files… (counting tiles)");
+    updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
     const totalTiles = orderedInfos.reduce(
@@ -965,6 +1028,7 @@ try {
 
     // 4) layout planning (не доводим прогресс до 100% ДО завершения расчётов)
     setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
+    updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
 let slotCentersByFile = null;
@@ -1027,6 +1091,7 @@ let slotCentersByFile = null;
     // Завершили layout planning
     prepDone += 1;
     setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
+    updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
     const allCreatedTiles = [];
@@ -1037,6 +1102,9 @@ let slotCentersByFile = null;
     let lastEtaUpdateTs = null;
     let lastEtaCreated = 0;
     let ewmaRateTilesPerMs = null;
+    let uploadedBytesDone = 0;
+    let lastEtaBytesDone = 0;
+    let ewmaRateBytesPerMs = null;
     const ETA_EWMA_ALPHA = 0.25;
 
     const startEta = () => {
@@ -1044,6 +1112,10 @@ let slotCentersByFile = null;
       lastEtaUpdateTs = uploadStartTs;
       lastEtaCreated = 0;
       ewmaRateTilesPerMs = null;
+
+      uploadedBytesDone = 0;
+      lastEtaBytesDone = 0;
+      ewmaRateBytesPerMs = null;
     };
 
     const pad2 = (n) => String(n).padStart(2, "0");
@@ -1057,34 +1129,69 @@ let slotCentersByFile = null;
         return;
       }
 
-      const remaining = totalTiles - createdTiles;
-      if (remaining <= 0) {
+      const remainingTiles = totalTiles - createdTiles;
+      if (remainingTiles <= 0) {
         setEtaText(null);
         return;
       }
 
       const now = performance.now();
+      const dt = now - (lastEtaUpdateTs || now);
 
       // Обновляем EWMA-рейт не чаще чем раз в ~200мс и только если был прогресс.
-      const dt = now - (lastEtaUpdateTs || now);
       const dc = createdTiles - lastEtaCreated;
-      if (dt >= 200 && dc > 0) {
-        const instRate = dc / dt; // tiles per ms
-        ewmaRateTilesPerMs = ewmaRateTilesPerMs == null ? instRate : ETA_EWMA_ALPHA * instRate + (1 - ETA_EWMA_ALPHA) * ewmaRateTilesPerMs;
+      const db = uploadedBytesDone - lastEtaBytesDone;
+
+      if (dt >= 200 && (dc > 0 || db > 0)) {
+        if (dc > 0) {
+          const instRateTiles = dc / dt; // tiles per ms
+          ewmaRateTilesPerMs =
+            ewmaRateTilesPerMs == null
+              ? instRateTiles
+              : ETA_EWMA_ALPHA * instRateTiles + (1 - ETA_EWMA_ALPHA) * ewmaRateTilesPerMs;
+        }
+
+        if (db > 0) {
+          const instRateBytes = db / dt; // bytes per ms
+          ewmaRateBytesPerMs =
+            ewmaRateBytesPerMs == null
+              ? instRateBytes
+              : ETA_EWMA_ALPHA * instRateBytes + (1 - ETA_EWMA_ALPHA) * ewmaRateBytesPerMs;
+        }
+
         lastEtaUpdateTs = now;
         lastEtaCreated = createdTiles;
+        lastEtaBytesDone = uploadedBytesDone;
       }
 
       const elapsed = now - uploadStartTs;
-      const overallRate = elapsed > 0 ? createdTiles / elapsed : 0;
-      const rate = (ewmaRateTilesPerMs && ewmaRateTilesPerMs > 0) ? ewmaRateTilesPerMs : overallRate;
-
-      if (!rate || rate <= 0) {
+      if (elapsed <= 0) {
         setEtaText(null);
         return;
       }
 
-      const etaMs = remaining / rate;
+      // Стараемся оценивать ETA по байтам: это точнее при разном размере тайлов.
+      const avgBytesPerTile = createdTiles > 0 ? (uploadedBytesDone / createdTiles) : null;
+      const rateBytes = ewmaRateBytesPerMs && ewmaRateBytesPerMs > 0 ? ewmaRateBytesPerMs : null;
+
+      if (avgBytesPerTile && rateBytes) {
+        const remainingBytes = remainingTiles * avgBytesPerTile;
+        const etaMs = remainingBytes / rateBytes;
+        setEtaText(etaMs);
+        return;
+      }
+
+      // Fallback: по тайлам
+      const overallRateTiles = createdTiles > 0 ? createdTiles / elapsed : 0;
+      const rateTiles =
+        ewmaRateTilesPerMs && ewmaRateTilesPerMs > 0 ? ewmaRateTilesPerMs : overallRateTiles;
+
+      if (!rateTiles || rateTiles <= 0) {
+        setEtaText(null);
+        return;
+      }
+
+      const etaMs = remainingTiles / rateTiles;
       setEtaText(etaMs);
     };
 
@@ -1196,6 +1303,7 @@ let slotCentersByFile = null;
         }
 
         allCreatedTiles.push(imgWidget);
+        uploadedBytesDone += (urlToUse ? urlToUse.length : 0);
         createdTiles += 1;
         updateCreationProgress();
 
@@ -1284,6 +1392,7 @@ let slotCentersByFile = null;
           }
 
           allCreatedTiles.push(tileWidget);
+          uploadedBytesDone += (tileDataUrl ? tileDataUrl.length : 0);
           createdTiles += 1;
           updateCreationProgress();
         }

@@ -16,7 +16,7 @@ const TARGET_URL_BYTES = 4500000;   // целевой размер dataURL (~4.5
 const CREATE_IMAGE_MAX_RETRIES = 5;
 const CREATE_IMAGE_BASE_DELAY_MS = 500;
 const UPLOAD_CONCURRENCY_SMALL = 3;
-const UPLOAD_CONCURRENCY_LARGE = 2;
+const UPLOAD_CONCURRENCY_LARGE = 3;
 
 const META_APP_ID = "image-align-tool";
 
@@ -716,20 +716,31 @@ async function handleStitchSubmit(event) {
   const progressEtaEl = document.getElementById("stitchProgressEta");
 
   const setProgress = (done, total, labelOverride) => {
-  const frac = total > 0 ? done / total : 0;
-  if (progressBarEl) {
+  // total === 0 используется для "статусных" сообщений (например, Calculating layout…)
+  // В этом случае НЕ трогаем ширину прогресс-бара, чтобы не было скачков.
+  if (total > 0 && progressBarEl) {
+    const frac = done / total;
     progressBarEl.style.width = `${(frac * 100).toFixed(1)}%`;
   }
-  if (progressMainEl) {
-    const label = labelOverride !== undefined ? String(labelOverride) : "Creating";
-    if (total > 0) {
-      progressMainEl.textContent = done < total ? `${label} ${done} / ${total}` : "Done!";
-    } else {
-      progressMainEl.textContent = labelOverride !== undefined ? label : "";
-    }
-  }
-};
 
+  if (!progressMainEl) return;
+
+  const label = labelOverride !== undefined ? String(labelOverride) : "Creating";
+
+  if (total > 0) {
+    if (done < total) {
+      progressMainEl.textContent = `${label} ${done} / ${total}`;
+    } else {
+      // Не показываем "Done!" после Preparing — это выглядит как будто всё закончилось.
+      progressMainEl.textContent =
+        label === "Preparing files…" ? `${label} ${done} / ${total}` : "Done!";
+    }
+    return;
+  }
+
+  // total === 0: просто статусная строка
+  progressMainEl.textContent = labelOverride !== undefined ? label : "";
+};
 
   const setEtaText = (ms) => {
     if (!progressEtaEl) return;
@@ -920,7 +931,13 @@ try {
       );
     }
 
-    let slotCentersByFile = null;
+    
+    // После подготовки: сортировка и расчёт раскладки (слоты/позиции)
+    // На больших партиях здесь может быть заметная пауза (GC + расчёты), показываем статус.
+    setProgress(0, 0, "Calculating layout…");
+    await new Promise((r) => setTimeout(r, 0));
+
+let slotCentersByFile = null;
     let slotCentersArray = null;
 
     const hasAnyNumber = orderedInfos.some((info) => {
@@ -1199,7 +1216,7 @@ try {
       try { imgEl.src = ""; } catch (e) {}
     };
 
-    // Для больших партий (например, 256 тайлов) лучше 2 параллельных потока.
+    // Для больших партий (например, 256 тайлов) используем 3 параллельных потока (с ретраями).
     const concurrency = totalTiles >= 128 ? UPLOAD_CONCURRENCY_LARGE : UPLOAD_CONCURRENCY_SMALL;
 
     await runWithConcurrency(orderedInfos, processOneInfo, concurrency);

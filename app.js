@@ -18,6 +18,9 @@ const CREATE_IMAGE_BASE_DELAY_MS = 500;
 const UPLOAD_CONCURRENCY_SMALL = 3;
 const UPLOAD_CONCURRENCY_LARGE = 3;
 
+const UPLOAD_CONCURRENCY_MIN = 2;
+const UPLOAD_CONCURRENCY_MAX = 4;
+const UPLOAD_CONCURRENCY_INITIAL_LARGE = 4;
 const META_APP_ID = "image-align-tool";
 
 // ---------- авто-детект лимита по стороне через WebGL ----------
@@ -739,7 +742,7 @@ async function handleStitchSubmit(event) {
     }
   };
 
-  const setProgress = (done, total, labelOverride) => {
+  let setProgress = (done, total, labelOverride) => {
   // total === 0 используется для "статусных" сообщений (например, Calculating layout…)
   // В этом случае НЕ трогаем ширину прогресс-бара, чтобы не было скачков.
   if (total > 0 && progressBarEl) {
@@ -767,7 +770,7 @@ async function handleStitchSubmit(event) {
   progressMainEl.textContent = labelOverride !== undefined ? label : "";
 };
 
-  const setEtaText = (ms) => {
+  let setEtaText = (ms) => {
     if (!progressEtaEl) return;
     if (ms == null || !Number.isFinite(ms) || ms < 0) {
       progressEtaEl.textContent = "";
@@ -781,6 +784,52 @@ async function handleStitchSubmit(event) {
     progressEtaEl.textContent = text;
   };
 
+
+// ---- UI update throttling (avoids excessive DOM reflows on 1000+ tiles) ----
+const makeThrottled = (fn, intervalMs = 200) => {
+  let lastCall = 0;
+  let timer = null;
+  let lastArgs = null;
+
+  const throttled = (...args) => {
+    lastArgs = args;
+    const now = performance.now();
+    const elapsed = now - lastCall;
+
+    if (elapsed >= intervalMs) {
+      lastCall = now;
+      fn(...lastArgs);
+      return;
+    }
+
+    if (timer) return;
+
+    timer = setTimeout(() => {
+      timer = null;
+      lastCall = performance.now();
+      fn(...lastArgs);
+    }, Math.max(0, intervalMs - elapsed));
+  };
+
+  throttled.flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (lastArgs) {
+      lastCall = performance.now();
+      fn(...lastArgs);
+    }
+  };
+
+  return throttled;
+};
+
+// Wrap progress UI updates with throttling
+const _setProgressNow = setProgress;
+const _setEtaTextNow = setEtaText;
+setProgress = makeThrottled(_setProgressNow, 200);
+setEtaText = makeThrottled(_setEtaTextNow, 200);
   try {
     const form = document.getElementById("stitch-form");
     if (!form) return;
@@ -807,6 +856,7 @@ async function handleStitchSubmit(event) {
     if (stitchButton) stitchButton.disabled = true;
     setProgress(0, 0, "");
     setEtaText(null);
+    if (setEtaText.flush) setEtaText.flush();
 
     const filesArray = Array.from(files);
 
@@ -1099,6 +1149,7 @@ let slotCentersByFile = null;
 
     // ---- ETA: считаем по фактической пропускной способности (учитывает параллелизм) ----
     let uploadStartTs = null;
+    let uploadRetryEvents = 0;
     let lastEtaUpdateTs = null;
     let lastEtaCreated = 0;
     let ewmaRateTilesPerMs = null;
@@ -1135,6 +1186,12 @@ let slotCentersByFile = null;
         return;
       }
 
+
+      const ETA_MIN_SAMPLES = 6;
+      if (createdTiles < ETA_MIN_SAMPLES) {
+        setEtaText(null);
+        return;
+      }
       const now = performance.now();
       const dt = now - (lastEtaUpdateTs || now);
 
@@ -1170,15 +1227,14 @@ let slotCentersByFile = null;
         return;
       }
 
-      // Стараемся оценивать ETA по байтам: это точнее при разном размере тайлов.
+      // ETA считаем и по байтам, и по количеству тайлов. Берём более "пессимистичную" оценку — так меньше расхождение.
       const avgBytesPerTile = createdTiles > 0 ? (uploadedBytesDone / createdTiles) : null;
       const rateBytes = ewmaRateBytesPerMs && ewmaRateBytesPerMs > 0 ? ewmaRateBytesPerMs : null;
 
+      let etaByBytes = null;
       if (avgBytesPerTile && rateBytes) {
         const remainingBytes = remainingTiles * avgBytesPerTile;
-        const etaMs = remainingBytes / rateBytes;
-        setEtaText(etaMs);
-        return;
+        etaByBytes = remainingBytes / rateBytes;
       }
 
       // Fallback: по тайлам
@@ -1191,7 +1247,18 @@ let slotCentersByFile = null;
         return;
       }
 
-      const etaMs = remainingTiles / rateTiles;
+      let etaByTiles = null;
+      if (rateTiles && rateTiles > 0) {
+        etaByTiles = remainingTiles / rateTiles;
+      }
+
+      let etaMs = null;
+      if (etaByBytes != null && etaByTiles != null) {
+        etaMs = Math.max(etaByBytes, etaByTiles);
+      } else {
+        etaMs = etaByBytes != null ? etaByBytes : etaByTiles;
+      }
+
       setEtaText(etaMs);
     };
 
@@ -1213,6 +1280,7 @@ let slotCentersByFile = null;
         } catch (e) {
           lastErr = e;
           attempt += 1;
+          uploadRetryEvents += 1;
 
           if (attempt > CREATE_IMAGE_MAX_RETRIES) break;
 
@@ -1239,6 +1307,43 @@ let slotCentersByFile = null;
 
       await Promise.all(runners);
     };
+
+
+
+const runWithAdaptiveConcurrency = async (items, worker, initialConcurrency, minConcurrency, maxConcurrency) => {
+  // Adaptive concurrency by "file batches": starts higher, backs off when retries/latency spike.
+  // This keeps large imports (1000+ tiles) fast but avoids instability on weaker networks / throttling.
+  let concurrency = Math.max(minConcurrency, Math.min(maxConcurrency, initialConcurrency));
+
+  let idx = 0;
+  while (idx < items.length) {
+    // Small batches let us react faster to throttling. Each "file" may expand into many tiles.
+    const batchSize = Math.min(items.length - idx, Math.max(concurrency * 2, 4));
+    const batch = items.slice(idx, idx + batchSize);
+
+    const retryBefore = uploadRetryEvents;
+    const t0 = performance.now();
+
+    await runWithConcurrency(batch, async (item, localI) => {
+      await worker(item, idx + localI);
+    }, concurrency);
+
+    const dt = performance.now() - t0;
+    const retries = uploadRetryEvents - retryBefore;
+
+    const msPerItem = dt / Math.max(1, batch.length);
+    const retriesPerItem = retries / Math.max(1, batch.length);
+
+    // Backoff rules: prefer stability over aggressive parallelism.
+    if ((retriesPerItem > 0.35 || msPerItem > 15000) && concurrency > minConcurrency) {
+      concurrency -= 1;
+    } else if (retriesPerItem < 0.08 && msPerItem < 9000 && concurrency < maxConcurrency) {
+      concurrency += 1;
+    }
+
+    idx += batch.length;
+  }
+};
 
     const processOneInfo = async (info, i) => {
       const { file, needsSlice, width, height, tilesX, tilesY } = info;
@@ -1401,12 +1506,17 @@ let slotCentersByFile = null;
       try { imgEl.src = ""; } catch (e) {}
     };
 
-    // Для больших партий (например, 256 тайлов) используем 3 параллельных потока (с ретраями).
-    const concurrency = totalTiles >= 128 ? UPLOAD_CONCURRENCY_LARGE : UPLOAD_CONCURRENCY_SMALL;
+    // Upload stage concurrency:
+// - starts at 4 for large imports, then adapts down/up between 2..4 based on retries/latency
+const initialConcurrency = totalTiles >= 128 ? UPLOAD_CONCURRENCY_INITIAL_LARGE : UPLOAD_CONCURRENCY_SMALL;
+const minConcurrency = UPLOAD_CONCURRENCY_MIN;
+const maxConcurrency = UPLOAD_CONCURRENCY_MAX;
 
-    await runWithConcurrency(orderedInfos, processOneInfo, concurrency);
-    setProgress(totalTiles, totalTiles);
+await runWithAdaptiveConcurrency(orderedInfos, processOneInfo, initialConcurrency, minConcurrency, maxConcurrency);
+setProgress(totalTiles, totalTiles);
+    if (setProgress.flush) setProgress.flush();
     setEtaText(null);
+    if (setEtaText.flush) setEtaText.flush();
 
     if (allCreatedTiles.length) {
       try {

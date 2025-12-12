@@ -715,6 +715,13 @@ async function handleStitchSubmit(event) {
   const progressMainEl = document.getElementById("stitchProgressMain");
   const progressEtaEl = document.getElementById("stitchProgressEta");
 
+  const STAGES_TOTAL = 2;
+  let stageIndex = 1; // 1/2 = Preparing, 2/2 = Uploading
+
+  const setStage = (idx) => {
+    stageIndex = Math.max(1, Math.min(STAGES_TOTAL, idx));
+  };
+
   const setProgress = (done, total, labelOverride) => {
   // total === 0 используется для "статусных" сообщений (например, Calculating layout…)
   // В этом случае НЕ трогаем ширину прогресс-бара, чтобы не было скачков.
@@ -725,15 +732,17 @@ async function handleStitchSubmit(event) {
 
   if (!progressMainEl) return;
 
-  const label = labelOverride !== undefined ? String(labelOverride) : "Creating";
+  const labelRaw = labelOverride !== undefined ? String(labelOverride) : "Creating";
+  const stagePrefix = `${stageIndex}/${STAGES_TOTAL} `;
+  const label = `${stagePrefix}${labelRaw}`;
 
   if (total > 0) {
     if (done < total) {
       progressMainEl.textContent = `${label} ${done} / ${total}`;
     } else {
       // Не показываем "Done!" после Preparing — это выглядит как будто всё закончилось.
-      progressMainEl.textContent =
-        label === "Preparing files…" ? `${label} ${done} / ${total}` : "Done!";
+      const keepCounts = labelRaw.startsWith("Preparing") || labelRaw.startsWith("Uploading");
+      progressMainEl.textContent = keepCounts ? `${label} ${done} / ${total}` : "Done!";
     }
     return;
   }
@@ -785,6 +794,11 @@ async function handleStitchSubmit(event) {
 
     const filesArray = Array.from(files);
 
+    // Stage 1/2: preparing (decode + analyze + planning). Мы НЕ храним base64 в памяти.
+    setStage(1);
+    const PREP_EXTRA_STEPS = 4; // sorting + indexing + tile counting + layout planning
+    const prepTotalSteps = filesArray.length + PREP_EXTRA_STEPS;
+
     let viewCenterX = 0;
     let viewCenterY = 0;
     try {
@@ -798,12 +812,12 @@ async function handleStitchSubmit(event) {
     const fileInfos = [];
     let anySliced = false;
 
-    setProgress(0, filesArray.length, "Preparing files…");
+    setProgress(0, prepTotalSteps, "Preparing files…");
 
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
       // Обновляем прогресс на этапе подготовки файлов
-      setProgress(i + 1, filesArray.length, "Preparing files…");
+      setProgress(i + 1, prepTotalSteps, "Preparing files…");
       // Даем браузеру шанс отрисовать прогресс на больших партиях
       await new Promise((r) => setTimeout(r, 0));
 // Используем object URL вместо dataURL, чтобы не держать гигантские base64-строки в памяти.
@@ -900,13 +914,26 @@ try {
       });
     }
 
+    // Доп. шаги подготовки (раньше здесь было ощущение "простоя")
+    let prepDone = filesArray.length;
+
     if (!fileInfos.length) {
       setProgress(0, 0, "Nothing to import.");
       setEtaText(null);
       return;
     }
 
+    // 1) sorting
+    prepDone += 1;
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (sorting)");
+    await new Promise((r) => setTimeout(r, 0));
+
     const orderedFiles = sortFilesByNameWithNumber(filesArray);
+
+    // 2) indexing
+    prepDone += 1;
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (indexing)");
+    await new Promise((r) => setTimeout(r, 0));
     const infoByFile = new Map();
     fileInfos.forEach((info) => infoByFile.set(info.file, info));
 
@@ -920,6 +947,11 @@ try {
       return;
     }
 
+    // 3) tile counting
+    prepDone += 1;
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (counting tiles)");
+    await new Promise((r) => setTimeout(r, 0));
+
     const totalTiles = orderedInfos.reduce(
       (sum, info) => sum + (info.needsSlice ? info.numTiles : 1),
       0
@@ -931,10 +963,8 @@ try {
       );
     }
 
-    
-    // После подготовки: сортировка и расчёт раскладки (слоты/позиции)
-    // На больших партиях здесь может быть заметная пауза (GC + расчёты), показываем статус.
-    setProgress(0, 0, "Calculating layout…");
+    // 4) layout planning (не доводим прогресс до 100% ДО завершения расчётов)
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
     await new Promise((r) => setTimeout(r, 0));
 
 let slotCentersByFile = null;
@@ -994,25 +1024,75 @@ let slotCentersByFile = null;
       );
     }
 
+    // Завершили layout planning
+    prepDone += 1;
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
+    await new Promise((r) => setTimeout(r, 0));
+
     const allCreatedTiles = [];
     let createdTiles = 0;
-    let creationCount = 0;
-    let creationTimeSumMs = 0;
+
+    // ---- ETA: считаем по фактической пропускной способности (учитывает параллелизм) ----
+    let uploadStartTs = null;
+    let lastEtaUpdateTs = null;
+    let lastEtaCreated = 0;
+    let ewmaRateTilesPerMs = null;
+    const ETA_EWMA_ALPHA = 0.25;
+
+    const startEta = () => {
+      uploadStartTs = performance.now();
+      lastEtaUpdateTs = uploadStartTs;
+      lastEtaCreated = 0;
+      ewmaRateTilesPerMs = null;
+    };
 
     const pad2 = (n) => String(n).padStart(2, "0");
     const pad3 = (n) => String(n).padStart(3, "0");
 
     const updateCreationProgress = () => {
-      setProgress(createdTiles, totalTiles);
-      if (creationCount > 0) {
-        const avgPerTile = creationTimeSumMs / creationCount;
-        const remaining = totalTiles - createdTiles;
-        const etaMs = remaining > 0 ? avgPerTile * remaining : null;
-        setEtaText(etaMs);
-      } else {
+      setProgress(createdTiles, totalTiles, "Uploading to board…");
+
+      if (!uploadStartTs) {
         setEtaText(null);
+        return;
       }
+
+      const remaining = totalTiles - createdTiles;
+      if (remaining <= 0) {
+        setEtaText(null);
+        return;
+      }
+
+      const now = performance.now();
+
+      // Обновляем EWMA-рейт не чаще чем раз в ~200мс и только если был прогресс.
+      const dt = now - (lastEtaUpdateTs || now);
+      const dc = createdTiles - lastEtaCreated;
+      if (dt >= 200 && dc > 0) {
+        const instRate = dc / dt; // tiles per ms
+        ewmaRateTilesPerMs = ewmaRateTilesPerMs == null ? instRate : ETA_EWMA_ALPHA * instRate + (1 - ETA_EWMA_ALPHA) * ewmaRateTilesPerMs;
+        lastEtaUpdateTs = now;
+        lastEtaCreated = createdTiles;
+      }
+
+      const elapsed = now - uploadStartTs;
+      const overallRate = elapsed > 0 ? createdTiles / elapsed : 0;
+      const rate = (ewmaRateTilesPerMs && ewmaRateTilesPerMs > 0) ? ewmaRateTilesPerMs : overallRate;
+
+      if (!rate || rate <= 0) {
+        setEtaText(null);
+        return;
+      }
+
+      const etaMs = remaining / rate;
+      setEtaText(etaMs);
     };
+
+    // Stage 2/2: uploading to board
+    setStage(2);
+    startEta();
+    setProgress(0, totalTiles, "Uploading to board…");
+    setEtaText(null);
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1117,8 +1197,6 @@ let slotCentersByFile = null;
 
         allCreatedTiles.push(imgWidget);
         createdTiles += 1;
-        creationCount += 1;
-        creationTimeSumMs += t1 - t0;
         updateCreationProgress();
 
         return;
@@ -1207,8 +1285,6 @@ let slotCentersByFile = null;
 
           allCreatedTiles.push(tileWidget);
           createdTiles += 1;
-          creationCount += 1;
-          creationTimeSumMs += t1 - t0;
           updateCreationProgress();
         }
       }

@@ -12,7 +12,11 @@ const SLICE_THRESHOLD_WIDTH = 8192;
 const SLICE_THRESHOLD_HEIGHT = 4096;
 let   MAX_SLICE_DIM = 16384;         // уточняем через WebGL
 const MAX_URL_BYTES = 29000000;      // лимит размера dataURL (~29 МБ, есть запас до 30 МБ)
-const TARGET_URL_BYTES = 8000000;   // целевой размер для сжатия (~8 МБ на тайл)
+const TARGET_URL_BYTES = 4500000;   // целевой размер dataURL (~4.5 МБ на тайл/изображение)
+const CREATE_IMAGE_MAX_RETRIES = 5;
+const CREATE_IMAGE_BASE_DELAY_MS = 500;
+const UPLOAD_CONCURRENCY_SMALL = 3;
+const UPLOAD_CONCURRENCY_LARGE = 2;
 
 const META_APP_ID = "image-align-tool";
 
@@ -510,31 +514,44 @@ function sortFilesByNameWithNumber(files) {
 }
 
 function canvasToDataUrlUnderLimit(canvas, maxBytes = TARGET_URL_BYTES) {
-  // Сжимает содержимое canvas в JPEG так, чтобы dataURL не превышал maxBytes.
-  // Стартуем с качества ~0.85 (близко к Photoshop 10–11) и постепенно уменьшаем,
-  // пока не уложимся в лимит. При необходимости можем опуститься ниже 0.8,
-  // чтобы гарантированно не вылетать по лимиту Miro, но обычно остаёмся в диапазоне 0.8–0.85.
-  const HARD_MIN_Q = 0.4; // ниже 0.4 уже заметно мылит, но это крайний случай
-  const MAX_ALLOWED_BYTES = Math.min(maxBytes, MAX_URL_BYTES);
+  // Цель: держать качество около 0.8–0.85 (примерно Photoshop 10–11),
+  // но при этом НИКОГДА не пробивать жесткий лимит Miro по размеру dataURL.
+  //
+  // Алгоритм:
+  // 1) Пробуем уложиться в target (maxBytes) качеством 0.85 → 0.82 → 0.80.
+  // 2) Если target не достигается при 0.80 — оставляем 0.80 (размер будет больше target, но качество лучше).
+  // 3) Если даже так превышаем жесткий лимит MAX_URL_BYTES — тогда уже снижаем качество ниже 0.80,
+  //    пока не уложимся в MAX_URL_BYTES (чтобы не было падений/пропусков).
 
-  let quality = 0.85;
+  const hardLimit = MAX_URL_BYTES;
+  const target = Math.min(maxBytes, hardLimit);
+
+  const tryQualities = [0.85, 0.82, 0.8];
+  for (const q of tryQualities) {
+    const dataUrl = canvas.toDataURL("image/jpeg", q);
+    if (dataUrl.length <= target) return dataUrl;
+  }
+
+  // Не влезли в target при 0.8 — оставляем 0.8 (это сознательный компромисс ради качества).
+  let quality = 0.8;
   let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  if (dataUrl.length <= hardLimit) return dataUrl;
 
-  // Плавно уменьшаем качество, пока не уложимся в лимит по размеру
-  while (dataUrl.length > MAX_ALLOWED_BYTES && quality > HARD_MIN_Q) {
+  // Крайний случай: даже при 0.8 пробиваем hardLimit — уменьшаем качество, чтобы гарантированно не падать.
+  const HARD_MIN_Q = 0.25;
+  while (dataUrl.length > hardLimit && quality > HARD_MIN_Q) {
     quality -= 0.05;
     dataUrl = canvas.toDataURL("image/jpeg", quality);
   }
 
-  // На всякий случай убеждаемся, что не пробиваем жёсткий лимит Miro
-  if (dataUrl.length > MAX_URL_BYTES) {
-    // Пробуем ещё сильнее сжать, как крайний вариант
-    quality = HARD_MIN_Q;
-    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  // Последняя страховка
+  if (dataUrl.length > hardLimit) {
+    dataUrl = canvas.toDataURL("image/jpeg", HARD_MIN_Q);
   }
 
   return dataUrl;
 }
+
 
 function computeVariableSlotCenters(
   orderedInfos,
@@ -699,23 +716,20 @@ async function handleStitchSubmit(event) {
   const progressEtaEl = document.getElementById("stitchProgressEta");
 
   const setProgress = (done, total, labelOverride) => {
-    const frac = total > 0 ? done / total : 0;
-    if (progressBarEl) {
-      progressBarEl.style.width = `${(frac * 100).toFixed(1)}%`;
+  const frac = total > 0 ? done / total : 0;
+  if (progressBarEl) {
+    progressBarEl.style.width = `${(frac * 100).toFixed(1)}%`;
+  }
+  if (progressMainEl) {
+    const label = labelOverride !== undefined ? String(labelOverride) : "Creating";
+    if (total > 0) {
+      progressMainEl.textContent = done < total ? `${label} ${done} / ${total}` : "Done!";
+    } else {
+      progressMainEl.textContent = labelOverride !== undefined ? label : "";
     }
-    if (progressMainEl) {
-      if (labelOverride !== undefined) {
-        progressMainEl.textContent = labelOverride;
-      } else if (total > 0) {
-        progressMainEl.textContent =
-          done < total
-            ? `Creating ${done} / ${total}`
-            : "Done!";
-      } else {
-        progressMainEl.textContent = "";
-      }
-    }
-  };
+  }
+};
+
 
   const setEtaText = (ms) => {
     if (!progressEtaEl) return;
@@ -779,13 +793,19 @@ async function handleStitchSubmit(event) {
       const file = filesArray[i];
       // Обновляем прогресс на этапе подготовки файлов
       setProgress(i + 1, filesArray.length, "Preparing files…");
+      // Даем браузеру шанс отрисовать прогресс на больших партиях
+      await new Promise((r) => setTimeout(r, 0));
+// Используем object URL вместо dataURL, чтобы не держать гигантские base64-строки в памяти.
+const objectUrl = URL.createObjectURL(file);
 
-      const dataUrl = await readFileAsDataUrl(file);
+let imgEl;
+try {
+  // Для objectUrl crossOrigin не нужен, но в loadImage он выставлен — это ок.
+  imgEl = await loadImage(objectUrl);
+        URL.revokeObjectURL(objectUrl);
+} catch (e) {
+        URL.revokeObjectURL(objectUrl);
 
-      let imgEl;
-      try {
-        imgEl = await loadImage(dataUrl);
-      } catch (e) {
         console.error("Stitch/Slice: browser failed to decode image", file.name, e);
         await board.notifications.showError(
           `Cannot import "${file.name}": browser failed to decode the image.`
@@ -852,11 +872,12 @@ async function handleStitchSubmit(event) {
         tilesY = Math.ceil(height / SLICE_TILE_SIZE);
         numTiles = tilesX * tilesY;
       }
+      // Освобождаем ссылку на декодированное изображение (помогает GC на больших партиях)
+      try { imgEl.src = ""; } catch (e) {}
+
 
       fileInfos.push({
         file,
-        dataUrl,
-        imgEl,
         width,
         height,
         briCode,
@@ -964,9 +985,6 @@ async function handleStitchSubmit(event) {
     const pad2 = (n) => String(n).padStart(2, "0");
     const pad3 = (n) => String(n).padStart(3, "0");
 
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-
     const updateCreationProgress = () => {
       setProgress(createdTiles, totalTiles);
       if (creationCount > 0) {
@@ -979,17 +997,53 @@ async function handleStitchSubmit(event) {
       }
     };
 
-    for (let i = 0; i < orderedInfos.length; i++) {
-      const info = orderedInfos[i];
-      const { file, needsSlice, imgEl, width, height, tilesX, tilesY } = info;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    const createImageWithRetry = async (params) => {
+      let attempt = 0;
+      let lastErr = null;
+
+      while (attempt <= CREATE_IMAGE_MAX_RETRIES) {
+        try {
+          return await board.createImage(params);
+        } catch (e) {
+          lastErr = e;
+          attempt += 1;
+
+          if (attempt > CREATE_IMAGE_MAX_RETRIES) break;
+
+          const base = CREATE_IMAGE_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          const jitter = Math.random() * 250;
+          await sleep(base + jitter);
+        }
+      }
+
+      throw lastErr;
+    };
+
+    const runWithConcurrency = async (items, worker, concurrency) => {
+      let cursor = 0;
+
+      const runners = new Array(concurrency).fill(0).map(async () => {
+        while (true) {
+          const i = cursor;
+          cursor += 1;
+          if (i >= items.length) break;
+          await worker(items[i], i);
+        }
+      });
+
+      await Promise.all(runners);
+    };
+
+    const processOneInfo = async (info, i) => {
+      const { file, needsSlice, width, height, tilesX, tilesY } = info;
 
       let center;
       if (slotCentersByFile) {
-        center =
-          slotCentersByFile.get(file) ||
-          { x: viewCenterX, y: viewCenterY };
+        center = slotCentersByFile.get(file) || { x: viewCenterX, y: viewCenterY };
       } else if (slotCentersArray) {
-        center = slotCentersArray[i];
+        center = slotCentersArray[i] || { x: viewCenterX, y: viewCenterY };
       } else {
         center = { x: viewCenterX, y: viewCenterY };
       }
@@ -999,34 +1053,34 @@ async function handleStitchSubmit(event) {
       const baseName = nameMatch ? nameMatch[1] : originalName;
       const originalExt = nameMatch && nameMatch[2] ? nameMatch[2] : "";
 
+      // Грузим изображение из локального object URL (без base64 в памяти)
+      const objectUrl = URL.createObjectURL(file);
+      let imgEl;
+      try {
+        imgEl = await loadImage(objectUrl);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      // Локальный canvas на воркер (не общий), чтобы можно было безопасно параллелить по файлам.
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const makeFullImageDataUrl = () => {
+        canvas.width = width;
+        canvas.height = height;
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(imgEl, 0, 0, width, height);
+        return canvasToDataUrlUnderLimit(canvas, TARGET_URL_BYTES);
+      };
+
       if (!needsSlice) {
         const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${originalName}`;
 
-        let urlToUse = info.dataUrl;
-
-        // Если dataURL слишком большой, слегка сжимаем изображение через canvas,
-        // чтобы уложиться в целевой лимит TARGET_URL_BYTES и не потерять сильно в качестве.
-        if (urlToUse.length > TARGET_URL_BYTES) {
-          canvas.width = width;
-          canvas.height = height;
-          ctx.clearRect(0, 0, width, height);
-          ctx.drawImage(imgEl, 0, 0, width, height);
-
-          const compressed = canvasToDataUrlUnderLimit(canvas);
-          if (!compressed) {
-            await board.notifications.showError(
-              `Image "${file.name}" is too large even after compression. Skipped.`
-            );
-            createdTiles += 1;
-            updateCreationProgress();
-            continue;
-          }
-
-          urlToUse = compressed;
-        }
+        const urlToUse = makeFullImageDataUrl();
 
         const t0 = performance.now();
-        const imgWidget = await board.createImage({
+        const imgWidget = await createImageWithRetry({
           url: urlToUse,
           x: center.x,
           y: center.y,
@@ -1049,102 +1103,106 @@ async function handleStitchSubmit(event) {
         creationCount += 1;
         creationTimeSumMs += t1 - t0;
         updateCreationProgress();
-      } else {
-        const colWidths = [];
-        const rowHeights = [];
 
+        return;
+      }
+
+      // ---- slice case ----
+
+      const colWidths = [];
+      const rowHeights = [];
+
+      for (let tx = 0; tx < tilesX; tx++) {
+        const w = Math.min(SLICE_TILE_SIZE, width - tx * SLICE_TILE_SIZE);
+        colWidths.push(w);
+      }
+      for (let ty = 0; ty < tilesY; ty++) {
+        const h = Math.min(SLICE_TILE_SIZE, height - ty * SLICE_TILE_SIZE);
+        rowHeights.push(h);
+      }
+
+      const mosaicW = colWidths.reduce((sum, w) => sum + w, 0);
+      const mosaicH = rowHeights.reduce((sum, h) => sum + h, 0);
+
+      const mosaicLeft = center.x - mosaicW / 2;
+      const mosaicTop = center.y - mosaicH / 2;
+
+      const colPrefix = [0];
+      for (let tx = 1; tx < tilesX; tx++) {
+        colPrefix[tx] = colPrefix[tx - 1] + colWidths[tx - 1];
+      }
+      const rowPrefix = [0];
+      for (let ty = 1; ty < tilesY; ty++) {
+        rowPrefix[ty] = rowPrefix[ty - 1] + rowHeights[ty - 1];
+      }
+
+      let tileIndexForName = 0;
+
+      for (let ty = 0; ty < tilesY; ty++) {
         for (let tx = 0; tx < tilesX; tx++) {
-          const sw0 = Math.min(SLICE_TILE_SIZE, width - tx * SLICE_TILE_SIZE);
-          colWidths.push(sw0);
-        }
-        for (let ty = 0; ty < tilesY; ty++) {
-          const sh0 = Math.min(SLICE_TILE_SIZE, height - ty * SLICE_TILE_SIZE);
-          rowHeights.push(sh0);
-        }
+          const sx = tx * SLICE_TILE_SIZE;
+          const sy = ty * SLICE_TILE_SIZE;
+          const sw = colWidths[tx];
+          const sh = rowHeights[ty];
 
-        const mosaicWidth = colWidths.reduce((a, b) => a + b, 0);
-        const mosaicHeight = rowHeights.reduce((a, b) => a + b, 0);
+          canvas.width = sw;
+          canvas.height = sh;
+          ctx.clearRect(0, 0, sw, sh);
+          ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
 
-        const mosaicLeft = center.x - mosaicWidth / 2;
-        const mosaicTop = center.y - mosaicHeight / 2;
+          // Всегда возвращаем dataURL (не пропускаем тайлы) — при необходимости функция сжатия
+          // опустит качество ниже 0.8, чтобы уложиться в лимиты.
+          const tileDataUrl = canvasToDataUrlUnderLimit(canvas, TARGET_URL_BYTES);
 
-        const colPrefix = [0];
-        for (let tx = 0; tx < tilesX; tx++) {
-          colPrefix.push(colPrefix[colPrefix.length - 1] + colWidths[tx]);
-        }
-        const rowPrefix = [0];
-        for (let ty = 0; ty < tilesY; ty++) {
-          rowPrefix.push(rowPrefix[rowPrefix.length - 1] + rowHeights[ty]);
-        }
+          const tileLeft = mosaicLeft + colPrefix[tx];
+          const tileTop = mosaicTop + rowPrefix[ty];
+          const centerX = tileLeft + sw / 2;
+          const centerY = tileTop + sh / 2;
 
-        let tileIndexForName = 0;
+          tileIndexForName += 1;
+          const tileSuffix = pad2(tileIndexForName); // 01, 02, 03...
+          const tileBaseName = `${baseName}_${tileSuffix}`;
+          const tileFullName = originalExt ? `${tileBaseName}${originalExt}` : tileBaseName;
 
-        for (let ty = 0; ty < tilesY; ty++) {
-          for (let tx = 0; tx < tilesX; tx++) {
-            const sx = tx * SLICE_TILE_SIZE;
-            const sy = ty * SLICE_TILE_SIZE;
-            const sw = Math.min(SLICE_TILE_SIZE, width - sx);
-            const sh = Math.min(SLICE_TILE_SIZE, height - sy);
+          const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${tileFullName}`;
 
-            canvas.width = sw;
-            canvas.height = sh;
-            ctx.clearRect(0, 0, sw, sh);
+          const t0 = performance.now();
+          const tileWidget = await createImageWithRetry({
+            url: tileDataUrl,
+            x: centerX,
+            y: centerY,
+            title,
+          });
+          const t1 = performance.now();
 
-            ctx.drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh);
-
-            const tileDataUrl = canvasToDataUrlUnderLimit(canvas);
-            if (!tileDataUrl) {
-              await board.notifications.showError(
-                `One of the tiles from "${file.name}" is too large even after compression. Skipped.`
-              );
-              createdTiles++;
-              updateCreationProgress();
-              continue;
-            }
-
-            const tileLeft = mosaicLeft + colPrefix[tx];
-            const tileTop = mosaicTop + rowPrefix[ty];
-            const centerX = tileLeft + sw / 2;
-            const centerY = tileTop + sh / 2;
-
-            tileIndexForName++;
-            const tileSuffix = pad2(tileIndexForName); // 01, 02, 03...
-            const tileBaseName = `${baseName}_${tileSuffix}`;
-            const tileFullName = originalExt
-              ? `${tileBaseName}${originalExt}`
-              : tileBaseName;
-
-            const title = `C${pad2(info.satCode)}/${pad3(info.briCode)} ${tileFullName}`;
-
-            const t0 = performance.now();
-            const tileWidget = await board.createImage({
-              url: tileDataUrl,
-              x: centerX,
-              y: centerY,
-              title,
+          try {
+            await tileWidget.setMetadata(META_APP_ID, {
+              fileName: originalName,
+              satCode: info.satCode,
+              briCode: info.briCode,
+              tileIndex: tileIndexForName,
+              tilesX,
+              tilesY,
             });
-            const t1 = performance.now();
-
-            try {
-              await tileWidget.setMetadata(META_APP_ID, {
-                fileName: tileFullName,
-                satCode: info.satCode,
-                briCode: info.briCode,
-              });
-            } catch (e) {
-              console.warn("setMetadata failed (slice tile):", e);
-            }
-
-            allCreatedTiles.push(tileWidget);
-            createdTiles++;
-            creationCount++;
-            creationTimeSumMs += t1 - t0;
-            updateCreationProgress();
+          } catch (e) {
+            console.warn("setMetadata failed (tile):", e);
           }
+
+          allCreatedTiles.push(tileWidget);
+          createdTiles += 1;
+          creationCount += 1;
+          creationTimeSumMs += t1 - t0;
+          updateCreationProgress();
         }
       }
-    }
 
+      try { imgEl.src = ""; } catch (e) {}
+    };
+
+    // Для больших партий (например, 256 тайлов) лучше 2 параллельных потока.
+    const concurrency = totalTiles >= 128 ? UPLOAD_CONCURRENCY_LARGE : UPLOAD_CONCURRENCY_SMALL;
+
+    await runWithConcurrency(orderedInfos, processOneInfo, concurrency);
     setProgress(totalTiles, totalTiles);
     setEtaText(null);
 

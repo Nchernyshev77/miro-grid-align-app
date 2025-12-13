@@ -19,7 +19,7 @@ const UPLOAD_CONCURRENCY_SMALL = 3;
 const UPLOAD_CONCURRENCY_LARGE = 4;
 
 const UPLOAD_CONCURRENCY_MIN = 2;
-const UPLOAD_CONCURRENCY_MAX = 6;
+const UPLOAD_CONCURRENCY_MAX = 5;
 const UPLOAD_CONCURRENCY_INITIAL_LARGE = 4;
 const META_APP_ID = "image-align-tool";
 
@@ -830,11 +830,17 @@ const makeThrottled = (fn, intervalMs = 200) => {
   return throttled;
 };
 
-// Wrap progress UI updates with throttling
-const _setProgressNow = setProgress;
-const _setEtaTextNow = setEtaText;
-setProgress = makeThrottled(_setProgressNow, 200);
-setEtaText = makeThrottled(_setEtaTextNow, 200);
+// Wrap progress UI updates with throttling (only once per session)
+if (!setProgress._throttleWrapped) {
+  const _setProgressNow = setProgress;
+  const _setEtaTextNow = setEtaText;
+  const sp = makeThrottled(_setProgressNow, 200);
+  const se = makeThrottled(_setEtaTextNow, 200);
+  sp._throttleWrapped = true;
+  se._throttleWrapped = true;
+  setProgress = sp;
+  setEtaText = se;
+}
   try {
     prepStartTs = performance.now();
 
@@ -865,69 +871,6 @@ setEtaText = makeThrottled(_setEtaTextNow, 200);
     setEtaText(null);
     if (setEtaText.flush) setEtaText.flush();
 
-    uploadEndTs = performance.now();
-    if (!prepEndTs) prepEndTs = uploadEndTs;
-
-    // ---- console stats (optional) ----
-    try {
-      const fmtMs = (ms) => {
-        if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
-        const s = Math.round(ms / 1000);
-        const mins = Math.floor(s / 60);
-        const secs = s % 60;
-        const secsStr = String(secs).padStart(2, "0");
-        return mins ? `${mins}m ${secsStr}s` : `${secsStr}s`;
-      };
-
-      const percentile = (arr, p) => {
-        if (!arr || !arr.length) return null;
-        const xs = arr.slice().sort((a, b) => a - b);
-        const idx = Math.min(xs.length - 1, Math.max(0, Math.round((xs.length - 1) * p)));
-        return Math.round(xs[idx]);
-      };
-
-      const prepMs = prepStartTs != null && prepEndTs != null ? prepEndTs - prepStartTs : null;
-      const uploadMs = uploadStartTs != null && uploadEndTs != null ? uploadEndTs - uploadStartTs : null;
-      const totalMs = prepStartTs != null && uploadEndTs != null ? uploadEndTs - prepStartTs : null;
-
-      const totalMB = uploadedBytesDone / 1_000_000;
-      const avgMBPerTile = createdTiles ? totalMB / createdTiles : 0;
-      const mbps = uploadMs ? totalMB / (uploadMs / 1000) : null;
-
-      const avgCreateMs = createImageWallTimeCount
-        ? Math.round(createImageWallTimeSumMs / createImageWallTimeCount)
-        : null;
-
-      console.groupCollapsed("[Image Align Tool] Import stats");
-      console.log("Files (sources):", fileInfos.length);
-      console.log("Tiles:", { total: totalTiles, created: createdTiles });
-      console.log("Time:", { preparing: fmtMs(prepMs), uploading: fmtMs(uploadMs), total: fmtMs(totalMs) });
-      console.log("Upload:", {
-        totalMB: Number(totalMB.toFixed(1)),
-        avgMBPerTile: Number(avgMBPerTile.toFixed(2)),
-        MBps: mbps != null ? Number(mbps.toFixed(2)) : null,
-      });
-      console.log("createImage wall-time (ms):", {
-        count: createImageWallTimeCount,
-        avg: avgCreateMs,
-        p50: percentile(createImageWallTimesMs, 0.5),
-        p95: percentile(createImageWallTimesMs, 0.95),
-      });
-      console.log("Retries:", {
-        total: uploadRetryEvents,
-        perTile: createdTiles ? Number((uploadRetryEvents / createdTiles).toFixed(3)) : null,
-      });
-      console.log("Concurrency:", {
-        maxSeen: maxConcurrencySeen,
-        configuredMax: UPLOAD_CONCURRENCY_MAX,
-      });
-      if (concurrencyDecisions.length) {
-        console.table(concurrencyDecisions.slice(-12));
-      }
-      console.groupEnd();
-    } catch (e) {
-      console.warn("[Image Align Tool] stats failed:", e);
-    }
 
     const filesArray = Array.from(files);
 
@@ -943,8 +886,8 @@ setEtaText = makeThrottled(_setEtaTextNow, 200);
     const PREP_ETA_EWMA_ALPHA = 0.25;
 
     const startPrepEta = () => {
-      prepStartTs = performance.now();
-      prepLastTs = prepStartTs;
+      prepLastTs = performance.now();
+
       prepLastDone = 0;
       ewmaPrepRateStepsPerMs = null;
       setEtaText(null);
@@ -1233,7 +1176,7 @@ let slotCentersByFile = null;
 
     // adaptive concurrency diagnostics
     let maxConcurrencySeen = 0;
-    const concurrencyDecisions = []; // {idx, conc, mbps, ips, retriesPerItem, msPerItem, action}
+    const concurrencyDecisions = []; // {idx, conc, mbps, ips, retriesPerTile, msPerTile, action}
     let lastEtaUpdateTs = null;
     let lastEtaCreated = 0;
     let ewmaRateTilesPerMs = null;
@@ -1376,7 +1319,10 @@ let slotCentersByFile = null;
 
           if (attempt > CREATE_IMAGE_MAX_RETRIES) break;
 
-          const base = CREATE_IMAGE_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          const msg = (e && e.message) ? e.message : String(e);
+          const isStackOverflow = msg.includes("Maximum call stack size exceeded");
+          const baseDelay = isStackOverflow ? Math.max(1500, CREATE_IMAGE_BASE_DELAY_MS) : CREATE_IMAGE_BASE_DELAY_MS;
+          const base = baseDelay * Math.pow(2, attempt - 1);
           const jitter = Math.random() * 250;
           await sleep(base + jitter);
         }
@@ -1464,12 +1410,12 @@ const runWithAdaptiveConcurrency = async (
     tpEwmaMbps =
       tpEwmaMbps == null ? mbps : EWMA_ALPHA * mbps + (1 - EWMA_ALPHA) * tpEwmaMbps;
 
-    const msPerItem = dtMs / Math.max(1, batch.length);
-    const retriesPerItem = retries / Math.max(1, batch.length);
+    const msPerTile = dtMs / Math.max(1, tilesDelta);
+    const retriesPerTile = retries / Math.max(1, tilesDelta);
 
     // Backoff rules: prefer stability over aggressive parallelism.
-    const unstable = (retriesPerItem > 0.35 || msPerItem > 15000);
-    const stable = (retriesPerItem < 0.08 && msPerItem < 9000);
+    const unstable = (retriesPerTile > 0.08 || msPerTile > 15000);
+    const stable = (retriesPerTile < 0.03 && msPerTile < 11000);
 
     let action = "keep";
 
@@ -1518,8 +1464,8 @@ const runWithAdaptiveConcurrency = async (
       lockedMax,
       mbps: Number.isFinite(mbps) ? Number(mbps.toFixed(2)) : null,
       ips: Number.isFinite(ips) ? Number(ips.toFixed(2)) : null,
-      retriesPerItem: Number.isFinite(retriesPerItem) ? Number(retriesPerItem.toFixed(3)) : null,
-      msPerItem: Number.isFinite(msPerItem) ? Math.round(msPerItem) : null,
+      retriesPerTile: Number.isFinite(retriesPerTile) ? Number(retriesPerTile.toFixed(3)) : null,
+      msPerTile: Number.isFinite(msPerTile) ? Math.round(msPerTile) : null,
       action,
     });
 
@@ -1707,6 +1653,67 @@ setProgress(totalTiles, totalTiles);
       } catch (e) {
         console.warn("zoomTo failed in Stitch/Slice:", e);
       }
+    }
+
+
+    // Mark end of upload stage for stats/ETA
+    uploadEndTs = performance.now();
+
+    // ---- console stats (console only) ----
+    try {
+      const fmtMs = (ms) => {
+        if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
+        const s = Math.round(ms / 1000);
+        const mins = Math.floor(s / 60);
+        const secs = s % 60;
+        const secsStr = String(secs).padStart(2, "0");
+        return mins ? `${mins}m ${secsStr}s` : `${secsStr}s`;
+      };
+
+      const percentile = (arr, p) => {
+        if (!arr || !arr.length) return null;
+        const xs = arr.slice().sort((a, b) => a - b);
+        const idx = Math.min(xs.length - 1, Math.max(0, Math.round((xs.length - 1) * p)));
+        return Math.round(xs[idx]);
+      };
+
+      const prepMs = prepStartTs != null && prepEndTs != null ? prepEndTs - prepStartTs : null;
+      const uploadMs = uploadStartTs != null && uploadEndTs != null ? uploadEndTs - uploadStartTs : null;
+      const totalMs = prepStartTs != null && uploadEndTs != null ? uploadEndTs - prepStartTs : null;
+
+      const totalMB = uploadedBytesDone / 1_000_000;
+      const avgMBPerTile = createdTiles ? totalMB / createdTiles : 0;
+      const mbps = uploadMs ? totalMB / (uploadMs / 1000) : null;
+
+      const avgCreateMs = createImageWallTimeCount
+        ? Math.round(createImageWallTimeSumMs / createImageWallTimeCount)
+        : null;
+
+      console.groupCollapsed("[Image Align Tool] Import stats");
+      console.log("Files (sources):", fileInfos.length);
+      console.log("Tiles:", { total: totalTiles, created: createdTiles });
+      console.log("Time:", { preparing: fmtMs(prepMs), uploading: fmtMs(uploadMs), total: fmtMs(totalMs) });
+      console.log("Upload:", {
+        totalMB: Math.round(totalMB * 10) / 10,
+        avgMBPerTile: Math.round(avgMBPerTile * 100) / 100,
+        mbps: mbps != null ? Math.round(mbps * 100) / 100 : null,
+        retries: uploadRetryEvents,
+      });
+      console.log("createImage wall-time (ms):", {
+        avg: avgCreateMs,
+        p50: percentile(createImageWallTimesMs, 0.5),
+        p95: percentile(createImageWallTimesMs, 0.95),
+      });
+      console.log("Concurrency:", {
+        maxSeen: maxConcurrencySeen,
+        configuredMax: UPLOAD_CONCURRENCY_MAX,
+      });
+      if (concurrencyDecisions.length) {
+        console.table(concurrencyDecisions.slice(-12));
+      }
+      console.groupEnd();
+    } catch (e) {
+      console.warn("[Image Align Tool] stats failed:", e);
     }
 
     await board.notifications.showInfo(

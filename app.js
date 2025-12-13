@@ -1218,18 +1218,18 @@ let slotCentersByFile = null;
     let createdTiles = 0;
 
     // ---- ETA: считаем по фактической пропускной способности (учитывает параллелизм) ----
-    let uploadStartTs = null;
-    let uploadRetryEvents = 0;
+    var uploadStartTs = null;
+    var uploadRetryEvents = 0;
 
     // ---- stats (console only) ----
-    let prepStartTs = null;
-    let prepEndTs = null;
-    let uploadEndTs = null;
+    var prepStartTs = null;
+    var prepEndTs = null;
+    var uploadEndTs = null;
 
     // createImage wall-time (includes retries/backoff)
-    const createImageWallTimesMs = [];
-    let createImageWallTimeSumMs = 0;
-    let createImageWallTimeCount = 0;
+    var createImageWallTimesMs = [];
+    var createImageWallTimeSumMs = 0;
+    var createImageWallTimeCount = 0;
 
     // adaptive concurrency diagnostics
     let maxConcurrencySeen = 0;

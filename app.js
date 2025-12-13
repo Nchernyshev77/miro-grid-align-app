@@ -742,7 +742,7 @@ async function handleStitchSubmit(event) {
     }
   };
 
-  let setProgress = (done, total, labelOverride) => {
+  let setProgress = (done, total, labelOverride, displayDone, displayTotal) => {
   // total === 0 используется для "статусных" сообщений (например, Calculating layout…)
   // В этом случае НЕ трогаем ширину прогресс-бара, чтобы не было скачков.
   if (total > 0 && progressBarEl) {
@@ -755,13 +755,18 @@ async function handleStitchSubmit(event) {
   const labelRaw = labelOverride !== undefined ? String(labelOverride) : "Creating";
   const label = labelRaw;
 
+  // For some phases (e.g., Preparing), we want the progress bar to use "done/total steps"
+  // but the visible counter to stay on "filesDone/filesTotal" to avoid confusion like 260/260 for 256 files.
+  const showDisplayCounts =
+    Number.isFinite(displayTotal) && displayTotal > 0 && Number.isFinite(displayDone);
+
   if (total > 0) {
     if (done < total) {
-      progressMainEl.textContent = `${label} ${done} / ${total}`;
+      progressMainEl.textContent = showDisplayCounts ? `${label} ${displayDone} / ${displayTotal}` : `${label} ${done} / ${total}`;
     } else {
       // Не показываем "Done!" после Preparing — это выглядит как будто всё закончилось.
       const keepCounts = labelRaw.startsWith("Preparing") || labelRaw.startsWith("Uploading");
-      progressMainEl.textContent = keepCounts ? `${label} ${done} / ${total}` : "Done!";
+      progressMainEl.textContent = keepCounts ? (showDisplayCounts ? `${label} ${displayDone} / ${displayTotal}` : `${label} ${done} / ${total}`) : "Done!";
     }
     return;
   }
@@ -921,12 +926,12 @@ setEtaText = makeThrottled(_setEtaTextNow, 200);
     let anySliced = false;
 
         startPrepEta();
-setProgress(0, prepTotalSteps, "Preparing files…");
+setProgress(0, prepTotalSteps, "Preparing files…", 0, filesArray.length);
 
     for (let i = 0; i < filesArray.length; i++) {
       const file = filesArray[i];
       // Обновляем прогресс на этапе подготовки файлов
-      setProgress(i + 1, prepTotalSteps, "Preparing files…");
+      setProgress(i + 1, prepTotalSteps, "Preparing files…", i + 1, filesArray.length);
       updatePrepEta(i + 1, prepTotalSteps);
       // Даем браузеру шанс отрисовать прогресс на больших партиях
       await new Promise((r) => setTimeout(r, 0));
@@ -1035,7 +1040,7 @@ try {
 
     // 1) sorting
     prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (sorting)");
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (sorting)", filesArray.length, filesArray.length);
     updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
@@ -1043,7 +1048,7 @@ try {
 
     // 2) indexing
     prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (indexing)");
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (indexing)", filesArray.length, filesArray.length);
     updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
     const infoByFile = new Map();
@@ -1061,7 +1066,7 @@ try {
 
     // 3) tile counting
     prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (counting tiles)");
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (counting tiles)", filesArray.length, filesArray.length);
     updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
@@ -1077,7 +1082,7 @@ try {
     }
 
     // 4) layout planning (не доводим прогресс до 100% ДО завершения расчётов)
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)", filesArray.length, filesArray.length);
     updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 
@@ -1140,7 +1145,7 @@ let slotCentersByFile = null;
 
     // Завершили layout planning
     prepDone += 1;
-    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)");
+    setProgress(prepDone, prepTotalSteps, "Preparing files… (layout)", filesArray.length, filesArray.length);
     updatePrepEta(prepDone, prepTotalSteps);
     await new Promise((r) => setTimeout(r, 0));
 

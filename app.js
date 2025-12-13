@@ -16,10 +16,10 @@ const TARGET_URL_BYTES = 4500000;   // целевой размер dataURL (~4.5
 const CREATE_IMAGE_MAX_RETRIES = 5;
 const CREATE_IMAGE_BASE_DELAY_MS = 500;
 const UPLOAD_CONCURRENCY_SMALL = 3;
-const UPLOAD_CONCURRENCY_LARGE = 3;
+const UPLOAD_CONCURRENCY_LARGE = 4;
 
 const UPLOAD_CONCURRENCY_MIN = 2;
-const UPLOAD_CONCURRENCY_MAX = 4;
+const UPLOAD_CONCURRENCY_MAX = 6;
 const UPLOAD_CONCURRENCY_INITIAL_LARGE = 4;
 const META_APP_ID = "image-align-tool";
 
@@ -836,6 +836,8 @@ const _setEtaTextNow = setEtaText;
 setProgress = makeThrottled(_setProgressNow, 200);
 setEtaText = makeThrottled(_setEtaTextNow, 200);
   try {
+    prepStartTs = performance.now();
+
     const form = document.getElementById("stitch-form");
     if (!form) return;
 
@@ -863,6 +865,70 @@ setEtaText = makeThrottled(_setEtaTextNow, 200);
     setEtaText(null);
     if (setEtaText.flush) setEtaText.flush();
 
+    uploadEndTs = performance.now();
+    if (!prepEndTs) prepEndTs = uploadEndTs;
+
+    // ---- console stats (optional) ----
+    try {
+      const fmtMs = (ms) => {
+        if (ms == null || !Number.isFinite(ms) || ms < 0) return null;
+        const s = Math.round(ms / 1000);
+        const mins = Math.floor(s / 60);
+        const secs = s % 60;
+        const secsStr = String(secs).padStart(2, "0");
+        return mins ? `${mins}m ${secsStr}s` : `${secsStr}s`;
+      };
+
+      const percentile = (arr, p) => {
+        if (!arr || !arr.length) return null;
+        const xs = arr.slice().sort((a, b) => a - b);
+        const idx = Math.min(xs.length - 1, Math.max(0, Math.round((xs.length - 1) * p)));
+        return Math.round(xs[idx]);
+      };
+
+      const prepMs = prepStartTs != null && prepEndTs != null ? prepEndTs - prepStartTs : null;
+      const uploadMs = uploadStartTs != null && uploadEndTs != null ? uploadEndTs - uploadStartTs : null;
+      const totalMs = prepStartTs != null && uploadEndTs != null ? uploadEndTs - prepStartTs : null;
+
+      const totalMB = uploadedBytesDone / 1_000_000;
+      const avgMBPerTile = createdTiles ? totalMB / createdTiles : 0;
+      const mbps = uploadMs ? totalMB / (uploadMs / 1000) : null;
+
+      const avgCreateMs = createImageWallTimeCount
+        ? Math.round(createImageWallTimeSumMs / createImageWallTimeCount)
+        : null;
+
+      console.groupCollapsed("[Image Align Tool] Import stats");
+      console.log("Files (sources):", fileInfos.length);
+      console.log("Tiles:", { total: totalTiles, created: createdTiles });
+      console.log("Time:", { preparing: fmtMs(prepMs), uploading: fmtMs(uploadMs), total: fmtMs(totalMs) });
+      console.log("Upload:", {
+        totalMB: Number(totalMB.toFixed(1)),
+        avgMBPerTile: Number(avgMBPerTile.toFixed(2)),
+        MBps: mbps != null ? Number(mbps.toFixed(2)) : null,
+      });
+      console.log("createImage wall-time (ms):", {
+        count: createImageWallTimeCount,
+        avg: avgCreateMs,
+        p50: percentile(createImageWallTimesMs, 0.5),
+        p95: percentile(createImageWallTimesMs, 0.95),
+      });
+      console.log("Retries:", {
+        total: uploadRetryEvents,
+        perTile: createdTiles ? Number((uploadRetryEvents / createdTiles).toFixed(3)) : null,
+      });
+      console.log("Concurrency:", {
+        maxSeen: maxConcurrencySeen,
+        configuredMax: UPLOAD_CONCURRENCY_MAX,
+      });
+      if (concurrencyDecisions.length) {
+        console.table(concurrencyDecisions.slice(-12));
+      }
+      console.groupEnd();
+    } catch (e) {
+      console.warn("[Image Align Tool] stats failed:", e);
+    }
+
     const filesArray = Array.from(files);
 
     // Stage 1/2: preparing (decode + analyze + planning). Мы НЕ храним base64 в памяти.
@@ -871,7 +937,6 @@ setEtaText = makeThrottled(_setEtaTextNow, 200);
     const prepTotalSteps = filesArray.length + PREP_EXTRA_STEPS;
 
     // ---- ETA for preparing (Stage 1/2) ----
-    let prepStartTs = null;
     let prepLastTs = null;
     let prepLastDone = 0;
     let ewmaPrepRateStepsPerMs = null;
@@ -1155,6 +1220,20 @@ let slotCentersByFile = null;
     // ---- ETA: считаем по фактической пропускной способности (учитывает параллелизм) ----
     let uploadStartTs = null;
     let uploadRetryEvents = 0;
+
+    // ---- stats (console only) ----
+    let prepStartTs = null;
+    let prepEndTs = null;
+    let uploadEndTs = null;
+
+    // createImage wall-time (includes retries/backoff)
+    const createImageWallTimesMs = [];
+    let createImageWallTimeSumMs = 0;
+    let createImageWallTimeCount = 0;
+
+    // adaptive concurrency diagnostics
+    let maxConcurrencySeen = 0;
+    const concurrencyDecisions = []; // {idx, conc, mbps, ips, retriesPerItem, msPerItem, action}
     let lastEtaUpdateTs = null;
     let lastEtaCreated = 0;
     let ewmaRateTilesPerMs = null;
@@ -1268,6 +1347,7 @@ let slotCentersByFile = null;
     };
 
     // Stage 2/2: uploading to board
+    prepEndTs = performance.now();
     setStage(2);
     startEta();
     setProgress(0, totalTiles, "Uploading to board…");
@@ -1279,9 +1359,16 @@ let slotCentersByFile = null;
       let attempt = 0;
       let lastErr = null;
 
+
+      const tStart = performance.now();
       while (attempt <= CREATE_IMAGE_MAX_RETRIES) {
         try {
-          return await board.createImage(params);
+          const res = await board.createImage(params);
+          const dt = performance.now() - tStart;
+          createImageWallTimesMs.push(dt);
+          createImageWallTimeSumMs += dt;
+          createImageWallTimeCount += 1;
+          return res;
         } catch (e) {
           lastErr = e;
           attempt += 1;
@@ -1315,40 +1402,131 @@ let slotCentersByFile = null;
 
 
 
-const runWithAdaptiveConcurrency = async (items, worker, initialConcurrency, minConcurrency, maxConcurrency) => {
-  // Adaptive concurrency by "file batches": starts higher, backs off when retries/latency spike.
-  // This keeps large imports (1000+ tiles) fast but avoids instability on weaker networks / throttling.
+const runWithAdaptiveConcurrency = async (
+  items,
+  worker,
+  initialConcurrency,
+  minConcurrency,
+  maxConcurrency
+) => {
+  // Adaptive concurrency by "file batches".
+  //
+  // Goals:
+  // - Be fast on large imports (1000+ tiles).
+  // - Avoid instability (throttling/timeouts) on weaker networks.
+  // - Auto-tune the upper bound (up to maxConcurrency) based on real throughput.
+  //
+  // Strategy:
+  // - Run in small batches so we can react quickly.
+  // - Back off on retry spikes or very slow batches.
+  // - Probe higher concurrency and keep it only if throughput improves meaningfully.
+
   let concurrency = Math.max(minConcurrency, Math.min(maxConcurrency, initialConcurrency));
+  let lockedMax = maxConcurrency;
+
+  const GAIN_THRESHOLD = 1.12; // need ~12% throughput gain to justify higher concurrency
+  const PROBE_BATCHES = 2;     // batches to evaluate a probe
+  const EWMA_ALPHA = 0.25;
 
   let idx = 0;
+  let tpEwmaMbps = null;
+  let probe = null; // { baseConc, baseTpMbps, batchesAtProbe }
+
+  // Avoid oscillation: small cooldown after changes.
+  let cooldownBatches = 0;
+
   while (idx < items.length) {
-    // Small batches let us react faster to throttling. Each "file" may expand into many tiles.
+    maxConcurrencySeen = Math.max(maxConcurrencySeen, concurrency);
+
+    // Small batches let us react faster. Each "file" may expand into many tiles.
     const batchSize = Math.min(items.length - idx, Math.max(concurrency * 2, 4));
     const batch = items.slice(idx, idx + batchSize);
 
     const retryBefore = uploadRetryEvents;
+    const bytesBefore = uploadedBytesDone;
+    const tilesBefore = createdTiles;
     const t0 = performance.now();
 
     await runWithConcurrency(batch, async (item, localI) => {
       await worker(item, idx + localI);
     }, concurrency);
 
-    const dt = performance.now() - t0;
+    const dtMs = performance.now() - t0;
     const retries = uploadRetryEvents - retryBefore;
 
-    const msPerItem = dt / Math.max(1, batch.length);
+    const bytesDelta = uploadedBytesDone - bytesBefore;
+    const tilesDelta = createdTiles - tilesBefore;
+
+    const dtSec = Math.max(0.001, dtMs / 1000);
+    const mbps = (bytesDelta / 1_000_000) / dtSec; // MB/sec
+    const ips = tilesDelta / dtSec;                // items/sec (tiles)
+
+    tpEwmaMbps =
+      tpEwmaMbps == null ? mbps : EWMA_ALPHA * mbps + (1 - EWMA_ALPHA) * tpEwmaMbps;
+
+    const msPerItem = dtMs / Math.max(1, batch.length);
     const retriesPerItem = retries / Math.max(1, batch.length);
 
     // Backoff rules: prefer stability over aggressive parallelism.
-    if ((retriesPerItem > 0.35 || msPerItem > 15000) && concurrency > minConcurrency) {
+    const unstable = (retriesPerItem > 0.35 || msPerItem > 15000);
+    const stable = (retriesPerItem < 0.08 && msPerItem < 9000);
+
+    let action = "keep";
+
+    if (cooldownBatches > 0) cooldownBatches -= 1;
+
+    if (unstable && concurrency > minConcurrency) {
       concurrency -= 1;
-    } else if (retriesPerItem < 0.08 && msPerItem < 9000 && concurrency < maxConcurrency) {
-      concurrency += 1;
+      lockedMax = Math.min(lockedMax, concurrency);
+      probe = null;
+      cooldownBatches = 1;
+      action = "down";
+    } else {
+      // Probe logic: attempt to increase only when stable.
+      if (probe && concurrency === probe.baseConc + 1) {
+        probe.batchesAtProbe += 1;
+
+        if (probe.batchesAtProbe >= PROBE_BATCHES) {
+          const gain = tpEwmaMbps / Math.max(1e-9, probe.baseTpMbps);
+
+          if (gain < GAIN_THRESHOLD) {
+            // Not worth it: cap and return to base concurrency.
+            lockedMax = probe.baseConc;
+            concurrency = lockedMax;
+            probe = null;
+            cooldownBatches = 1;
+            action = "cap";
+          } else {
+            // Worth it: accept higher concurrency as new base.
+            probe = null;
+            cooldownBatches = 1;
+            action = "accept";
+          }
+        }
+      } else if (!probe && stable && cooldownBatches === 0 && concurrency < lockedMax) {
+        // Start a probe: remember throughput at current concurrency, then increase by 1.
+        probe = { baseConc: concurrency, baseTpMbps: tpEwmaMbps ?? mbps, batchesAtProbe: 0 };
+        concurrency += 1;
+        action = "up";
+        cooldownBatches = 1;
+      }
     }
+
+    concurrencyDecisions.push({
+      idx,
+      conc: concurrency,
+      lockedMax,
+      mbps: Number.isFinite(mbps) ? Number(mbps.toFixed(2)) : null,
+      ips: Number.isFinite(ips) ? Number(ips.toFixed(2)) : null,
+      retriesPerItem: Number.isFinite(retriesPerItem) ? Number(retriesPerItem.toFixed(3)) : null,
+      msPerItem: Number.isFinite(msPerItem) ? Math.round(msPerItem) : null,
+      action,
+    });
 
     idx += batch.length;
   }
 };
+;
 
     const processOneInfo = async (info, i) => {
       const { file, needsSlice, width, height, tilesX, tilesY } = info;
